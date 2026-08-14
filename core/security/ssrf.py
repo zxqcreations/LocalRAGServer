@@ -52,13 +52,18 @@ def is_public_ip(ip_str: str) -> bool:
     )
 
 
-def resolve_public(host: str) -> None:
-    """DNS 解析并校验全部地址为公网；任一非公网即拒绝（防 rebinding）。"""
+def resolve_public(host: str) -> list[str]:
+    """DNS 解析并校验全部地址为公网，返回排序后的公网 IP 列表。
+
+    任一解析结果非公网即整体拒绝（防 rebinding 的第一道防线）；
+    调用方必须固定连接返回的 IP（第二道防线：杜绝解析-连接间的 TOCTOU，审计 M-1）。
+    """
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError as exc:
         raise SsrfBlockedError(f"域名解析失败：{host}（{exc}）") from exc
     addrs = {str(info[4][0]) for info in infos}  # getaddrinfo 地址元组首元素收窄为 str
+    publics: list[str] = []
     for addr in addrs:
         # IPv4-mapped IPv6（::ffff:x.x.x.x）解包回 IPv4 再判
         candidate = addr
@@ -66,6 +71,8 @@ def resolve_public(host: str) -> None:
             candidate = candidate.removeprefix("::ffff:")
         if not is_public_ip(candidate):
             raise SsrfBlockedError(f"目标解析到非公网地址：{addr}（主机 {host}）")
+        publics.append(candidate)
+    return sorted(publics)
 
 
 def _host_allowed(host: str, allowlist: set[str]) -> bool:
@@ -120,30 +127,59 @@ class UrlFetcher:
         max_bytes: int = MAX_BODY_BYTES,
         timeout: float = 15.0,
         allow_loopback: bool = False,  # 仅测试用：本机假服务器
+        transport: httpx.BaseTransport | None = None,  # 测试注入
     ) -> None:
         self._allowlist = allowlist or set()
         self._max_redirects = max_redirects
         self._max_bytes = max_bytes
         self._allow_loopback = allow_loopback
-        self._client = httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False)
+        self._client = httpx.Client(
+            timeout=timeout, follow_redirects=False, trust_env=False, transport=transport
+        )
 
-    def _check_url(self, url: str) -> None:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            raise SsrfBlockedError(f"协议不允许：{parsed.scheme}（仅 http/https）")
-        host = parsed.hostname or ""
-        if not host:
-            raise SsrfBlockedError("URL 缺少主机名")
-        if not _host_allowed(host, self._allowlist):
-            raise SsrfBlockedError(f"域名不在白名单：{host}")
-        if not self._allow_loopback:
-            resolve_public(host)
+    def _resolve_host(self, host: str) -> str | None:
+        """域名 → 固定连接的公网 IP；IP 字面量校验后原样；测试模式返回 None（直连）。
+
+        审计 M-1：解析校验与连接必须使用同一次解析结果——固定第一个已验证 IP，
+        消除"校验后 DNS 变更指向内网"的 TOCTOU 窗口（Host/SNI 保持原域名）。
+        """
+        if self._allow_loopback:
+            return None  # 测试/开发：本机假服务器，不做 IP 固定
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass  # 域名
+        else:
+            if not is_public_ip(host):
+                raise SsrfBlockedError(f"目标地址非公网：{host}")
+            return None  # 已是 IP 字面量，无需改写
+        ips = resolve_public(host)
+        return ips[0]
 
     def fetch(self, url: str) -> FetchResult:
         current = url
         for hops in range(self._max_redirects + 1):
-            self._check_url(current)  # 逐跳重校验（防护层 4）
-            resp = self._client.get(current)
+            parsed = urlparse(current)
+            if parsed.scheme not in {"http", "https"}:
+                raise SsrfBlockedError(f"协议不允许：{parsed.scheme}（仅 http/https）")
+            host = parsed.hostname or ""
+            if not host:
+                raise SsrfBlockedError("URL 缺少主机名")
+            if not _host_allowed(host, self._allowlist):
+                raise SsrfBlockedError(f"域名不在白名单：{host}")
+            # 逐跳解析+校验+固定 IP（防护层 3/4；M-1 修复）
+            ip_target = self._resolve_host(host)
+            if ip_target is not None:
+                port = f":{parsed.port}" if parsed.port else ""
+                connect_url = parsed._replace(netloc=f"{ip_target}{port}").geturl()
+                host_header = host if not parsed.port else f"{host}:{parsed.port}"
+                resp = self._client.get(
+                    connect_url,
+                    headers={"Host": host_header},
+                    extensions={"sni_hostname": host},
+                )
+            else:
+                resp = self._client.get(current)
             if resp.is_redirect:
                 location = resp.headers.get("location")
                 if not location:

@@ -112,5 +112,51 @@ def test_body_size_limit(fake_site):
         fetcher.fetch(fake_site.url)
 
 
+def test_rebinding_fix_connects_to_resolved_ip(monkeypatch):
+    # 审计 M-1 核心断言：域名解析后必须固定连接已验证 IP，Host/SNI 保持原域名
+    import httpx
+
+    monkeypatch.setattr(
+        "core.security.ssrf.socket.getaddrinfo",
+        lambda host, port: [(2, 1, 6, "", ("8.8.8.8", 0))],
+    )
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers.get("Host", "")
+        return httpx.Response(200, text="<html><head><title>ok</title></head></html>")
+
+    fetcher = UrlFetcher(transport=httpx.MockTransport(handler))
+    result = fetcher.fetch("http://example.com/page")
+    assert seen["url"] == "http://8.8.8.8/page"  # 连接目标 = 已验证 IP
+    assert seen["host"] == "example.com"  # Host 头保持原域名
+    assert result.title == "ok"
+
+
+def test_rebinding_fix_redirects_revalidate_each_hop(monkeypatch):
+    # 每跳重定向都重新解析+固定（首跳 8.8.8.8，重定向到 second.com → 1.1.1.1）
+    import httpx
+
+    resolves = {"example.com": "8.8.8.8", "second.com": "1.1.1.1"}
+
+    def fake_getaddrinfo(host, port):
+        return [(2, 1, 6, "", (resolves[host], 0))]
+
+    monkeypatch.setattr("core.security.ssrf.socket.getaddrinfo", fake_getaddrinfo)
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "8.8.8.8":
+            return httpx.Response(302, headers={"Location": "http://second.com/final"})
+        return httpx.Response(200, text="<html><head><title>ok</title></head></html>")
+
+    fetcher = UrlFetcher(transport=httpx.MockTransport(handler))
+    result = fetcher.fetch("http://example.com/start")
+    assert seen == ["http://8.8.8.8/start", "http://1.1.1.1/final"]  # 每跳固定解析 IP
+    assert result.title == "ok"
+
+
 def test_html_to_text_basic():
     assert "你好" in html_to_text("<p>你好</p><script>ignore()</script>")
