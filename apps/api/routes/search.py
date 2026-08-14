@@ -28,7 +28,13 @@ def search(
     require_kb_access(body.kb_id, allowed)  # ACL 强制点：越权 403（不掩盖）
     if registry.get_kb(body.kb_id) is None:
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
+    import time as _time
+
+    _started = _time.perf_counter()
     results = search_service.search(body.kb_id, body.query, body.top_k)
+    request.app.state.metrics.observe(
+        "search.latency_ms", (_time.perf_counter() - _started) * 1000
+    )
     # 审计埋点（F-05：检索事件；查询文本不落日志，仅记录动作与 KB）
     registry.record_audit(
         actor=getattr(request.state, "actor", ""),

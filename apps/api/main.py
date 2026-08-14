@@ -1,6 +1,8 @@
 """FastAPI 应用工厂、生命周期、认证中间件与统一异常信封。"""
 import json
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 from secrets import compare_digest
 
@@ -19,6 +21,8 @@ from apps.api.routes import chat, documents, kb, search
 from apps.api.schemas import err
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
+from core.observability.logging import configure_logging
+from core.observability.metrics import MetricsCollector
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
@@ -53,6 +57,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         app.state.registry = Registry(settings.database_url)
         app.state.limiter = build_limiter()
+        app.state.metrics = MetricsCollector()
+        configure_logging()
         embedder = build_embedder(settings)
         app.state.vector_store = QdrantVectorStore(
             url=settings.qdrant_url,
@@ -149,6 +155,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "meta": None,
             },
         )
+
+    # ---- trace_id 中间件（observability.md §2：贯穿检索/重排/生成链路） ----
+
+    @app.middleware("http")
+    async def trace_middleware(request: Request, call_next):
+        # 仅 API 路径追踪（健康/探针/文档不生成 trace，observability.md §2）
+        if not request.url.path.startswith(("/api/", "/v1/")):
+            return await call_next(request)
+        request.state.trace_id = uuid.uuid4().hex[:16]
+        request.state.started_at = time.perf_counter()
+        response = await call_next(request)
+        response.headers["X-Trace-Id"] = request.state.trace_id
+        app.state.metrics.incr("api.requests")
+        if response.status_code >= 400:
+            app.state.metrics.incr("api.errors")
+            app.state.metrics.incr(f"api.status.{response.status_code}")
+        return response
 
     # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
 

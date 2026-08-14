@@ -101,8 +101,10 @@ def chat_completions(
         # 拒答判定（审计 F12/ARC-014）：字段按重排是否激活选择，阈值语义 best < threshold
         field = refusal_field(rerank_active=settings.rerank_backend != "off")
         if should_refuse(results, settings.refusal_threshold, field=field):
+            request.app.state.metrics.incr("chat.refusals")
             content = REFUSAL_TEXT
         else:
+            request.app.state.metrics.incr("chat.rag_answers")
             # 生成用 parent 回填后的上下文（架构 §5：子块检索、父块入生成）
             messages = build_rag_messages(question, [r.expanded_content for r in results])
             if body.stream:

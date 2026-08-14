@@ -35,6 +35,20 @@ def test_health(client):
     assert resp.json()["success"] is True
 
 
+def test_trace_id_and_metrics(client):
+    # observability.md §2：X-Trace-Id 响应头 + 错误率计数
+    resp = client.get("/health")
+    assert "X-Trace-Id" not in resp.headers  # 非 API 路径不追踪
+    kb_id = _create_kb(client)
+    search = client.post("/api/v1/search", json={"query": "量子", "kb_id": kb_id})
+    assert "X-Trace-Id" in search.headers
+    client.post("/api/v1/search", json={"query": "x", "kb_id": "nope"})
+    metrics = client.app.state.metrics.snapshot()
+    assert metrics["counters"].get("api.requests", 0) >= 2
+    assert metrics["counters"].get("api.errors", 0) >= 1
+    assert "search.latency_ms" in metrics["latencies"]
+
+
 def test_healthz_and_readyz(client):
     # 探针免认证（审计 ARC-010）
     hz = client.get("/healthz", headers={})
