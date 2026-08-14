@@ -23,6 +23,7 @@ from apps.api.schemas import (
 )
 from core.config import Settings
 from core.generation.llm import ChatClient, build_rag_messages
+from core.generation.refusal import refusal_field, should_refuse
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
 
@@ -80,9 +81,9 @@ def chat_completions(
         if registry.get_kb(body.rag_kb_id) is None:
             raise_http(404, KB_NOT_FOUND, "知识库不存在")
         results = search_service.search(body.rag_kb_id, question, body.rag_top_k)
-        # 拒答判定用 dense 语义相似度（审计 ARC-014：阈值与分数分布绑定；RRF 分数仅用于排序）
-        best_dense = max((r.dense_score for r in results), default=0.0)
-        if not results or best_dense < settings.refusal_threshold:
+        # 拒答判定（审计 F12/ARC-014）：字段按重排是否激活选择，阈值语义 best < threshold
+        field = refusal_field(rerank_active=settings.rerank_backend != "off")
+        if should_refuse(results, settings.refusal_threshold, field=field):
             content = REFUSAL_TEXT
         else:
             # 生成用 parent 回填后的上下文（架构 §5：子块检索、父块入生成）
