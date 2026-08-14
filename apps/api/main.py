@@ -256,7 +256,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_id = request.cookies.get(COOKIE_NAME, "")
         if session_id:
             session_record = app.state.registry.find_admin_session(hash_session(session_id))
-            if session_record is not None and session_record.expires_at > datetime.now(UTC).replace(tzinfo=None):
+            if session_record is not None and session_record.expires_at > datetime.now(UTC).replace(
+                tzinfo=None
+            ):
                 admin_user = app.state.registry.get_admin_user_by_id(session_record.user_id)
                 if admin_user is not None:
                     request.state.admin_user = admin_user
