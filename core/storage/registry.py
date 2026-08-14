@@ -194,6 +194,22 @@ class Registry:
             rows = s.exec(select(ChunkRow).where(ChunkRow.id.in_(chunk_ids))).all()  # type: ignore[attr-defined]
         return {r.id: r.content for r in rows}
 
+    def get_chunk_doc_map(self, chunk_ids: list[str]) -> dict[str, str]:
+        """chunk_id → doc_id 归属映射。"""
+        with Session(self._engine) as s:
+            rows = s.exec(select(ChunkRow).where(ChunkRow.id.in_(chunk_ids))).all()  # type: ignore[attr-defined]
+        return {r.id: r.doc_id for r in rows}
+
+    def list_chunks(self, kb_id: str) -> list[tuple[str, str]]:
+        """KB 全量 chunk（id, content），按文档与序号排序——供混合检索的 BM25 建索引。"""
+        with Session(self._engine) as s:
+            rows = s.exec(
+                select(ChunkRow).where(ChunkRow.kb_id == kb_id).order_by(  # type: ignore[arg-type]
+                    ChunkRow.doc_id, ChunkRow.index
+                )
+            ).all()
+        return [(r.id, r.content) for r in rows]
+
     def delete_document(self, kb_id: str, doc_id: str) -> None:
         with Session(self._engine) as s:
             s.exec(delete(ChunkRow).where(ChunkRow.doc_id == doc_id))  # type: ignore[arg-type]

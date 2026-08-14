@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.ingest.chunker import chunk_text
 from core.ingest.parsers import parse_file
+from core.retrieval.hybrid import HybridRetriever
 from core.storage.registry import Document, Registry
 from core.storage.vector import VectorPoint, VectorStore
 
@@ -18,7 +19,8 @@ class SearchResult:
     chunk_id: str
     doc_id: str
     doc_title: str
-    score: float
+    score: float  # 融合排序分（RRF）
+    dense_score: float  # dense 语义相似度（拒答判定）
     content: str
 
 
@@ -38,6 +40,7 @@ class SearchService:
         self._chunk_size = chunk_size
         self._overlap = overlap
         self._max_pdf_pages = max_pdf_pages
+        self._hybrid_cache: dict[str, HybridRetriever] = {}  # KB 级混合检索缓存
 
     def ensure_ready(self) -> None:
         self._store.ensure_collection(self._embedder.dim)
@@ -95,6 +98,7 @@ class SearchService:
                 for chunk_id, vector, chunk in zip(chunk_ids, vectors, chunks, strict=True)
             ]
             self._store.upsert(points)
+            self._invalidate_hybrid(kb_id)
         except Exception as exc:
             self._registry.mark_document_failed(doc.id, str(exc))
             raise
@@ -103,27 +107,38 @@ class SearchService:
             raise RuntimeError(f"文档 {doc.id} 摄取后未找到（数据不一致）")
         return result
 
+    def _get_hybrid(self, kb_id: str) -> HybridRetriever:
+        if kb_id not in self._hybrid_cache:
+            self._hybrid_cache[kb_id] = HybridRetriever(
+                self._store, self._registry, kb_id, rrf_k=60
+            )
+        return self._hybrid_cache[kb_id]
+
+    def _invalidate_hybrid(self, kb_id: str) -> None:
+        self._hybrid_cache.pop(kb_id, None)
+
     def search(self, kb_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
-        """dense 检索 + 正文回查；结果按分数降序。"""
+        """混合检索（dense + BM25 → RRF，架构 §6）+ 正文回查；结果按融合分数降序。"""
         vector = self._embedder.embed([query])[0]
-        scored = self._store.search(vector, kb_id, limit=top_k)
-        if not scored:
+        hits = self._get_hybrid(kb_id).search(query, vector, top_k=top_k)
+        if not hits:
             return []
-        contents = self._registry.get_chunk_contents([s.id for s in scored])
-        docs = self._registry.get_documents_by_ids(
-            list({s.payload.get("doc_id", "") for s in scored})
-        )
+        chunk_ids = [h.chunk_id for h in hits]
+        contents = self._registry.get_chunk_contents(chunk_ids)
+        docs_by_chunk = self._registry.get_chunk_doc_map(chunk_ids)
+        docs = self._registry.get_documents_by_ids(list(set(docs_by_chunk.values())))
         results = []
-        for s in scored:
-            doc_id = s.payload.get("doc_id", "")
+        for h in hits:
+            doc_id = docs_by_chunk.get(h.chunk_id, "")
             doc = docs.get(doc_id)
             results.append(
                 SearchResult(
-                    chunk_id=s.id,
+                    chunk_id=h.chunk_id,
                     doc_id=doc_id,
                     doc_title=doc.title if doc else "",
-                    score=s.score,
-                    content=contents.get(s.id, ""),
+                    score=h.score,
+                    dense_score=h.dense_score if h.dense_score is not None else 0.0,
+                    content=contents.get(h.chunk_id, ""),
                 )
             )
         return results
@@ -132,3 +147,4 @@ class SearchService:
         """删除文档：先删向量再删注册表（保证查询不命中已删文档的 chunk）。"""
         self._store.delete_by_document(kb_id, doc_id)
         self._registry.delete_document(kb_id, doc_id)
+        self._invalidate_hybrid(kb_id)

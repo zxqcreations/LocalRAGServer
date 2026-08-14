@@ -80,7 +80,9 @@ def chat_completions(
         if registry.get_kb(body.rag_kb_id) is None:
             raise_http(404, KB_NOT_FOUND, "知识库不存在")
         results = search_service.search(body.rag_kb_id, question, body.rag_top_k)
-        if not results or results[0].score < settings.refusal_threshold:
+        # 拒答判定用 dense 语义相似度（审计 ARC-014：阈值与分数分布绑定；RRF 分数仅用于排序）
+        best_dense = max((r.dense_score for r in results), default=0.0)
+        if not results or best_dense < settings.refusal_threshold:
             content = REFUSAL_TEXT
         else:
             messages = build_rag_messages(question, [r.content for r in results])

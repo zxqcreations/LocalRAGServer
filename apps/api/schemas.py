@@ -91,6 +91,7 @@ class SearchResultOut(BaseModel):
     doc_id: str
     doc_title: str
     score: float
+    dense_score: float
     content: str
 
 
