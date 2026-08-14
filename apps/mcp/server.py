@@ -56,7 +56,7 @@ def build_mcp_server(
                     "在知识库中检索相关内容（混合检索：语义 + 关键词，重排后返回带引用 chunk）。"
                     f"可用知识库：{_kb_names()}。适合：先检索再自行推理的场景。"
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "检索查询（自然语言）"},
@@ -69,7 +69,7 @@ def build_mcp_server(
             types.Tool(
                 name="list_knowledge_bases",
                 description="列出当前可访问的知识库（名称/ID/类型）。",
-                inputSchema={"type": "object", "properties": {}},
+                input_schema={"type": "object", "properties": {}},
             ),
             types.Tool(
                 name="ask",
@@ -77,7 +77,7 @@ def build_mcp_server(
                     "基于知识库内容回答问题（检索 + 生成，返回带 [n] 引用的答案）。"
                     "适合：需要完整答案而非原始 chunk 的场景。"
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "question": {"type": "string", "description": "问题"},
@@ -92,7 +92,7 @@ def build_mcp_server(
                     "将本机文件路径提交到摄取队列（异步处理，返回 job_id）。"
                     "仅限本机 stdio 通道使用（审计 F-11：远程通道不接受本地路径）。"
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "本机文件绝对路径"},
@@ -104,7 +104,7 @@ def build_mcp_server(
             types.Tool(
                 name="get_document_status",
                 description="查询摄取任务或文档的处理状态。",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string", "description": "摄取任务 ID"},
@@ -222,15 +222,15 @@ def build_mcp_server(
 
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=f"未知工具：{name}")],
-                isError=True,
+                is_error=True,
             )
         except ValueError as exc:
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=str(exc))], isError=True
+                content=[types.TextContent(type="text", text=str(exc))], is_error=True
             )
         except PermissionError as exc:
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=str(exc))], isError=True
+                content=[types.TextContent(type="text", text=str(exc))], is_error=True
             )
 
     server.add_request_handler("tools/list", types.RequestParams, _handle_list_tools)

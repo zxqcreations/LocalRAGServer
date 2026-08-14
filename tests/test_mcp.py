@@ -2,7 +2,7 @@
 import pytest
 
 from apps.mcp.server import build_mcp_server
-from core.config import Settings
+from core.config import Settings, get_settings
 from core.retrieval.embeddings import StubEmbedder
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
@@ -10,8 +10,15 @@ from core.storage.vector import InMemoryVectorStore
 
 
 @pytest.fixture
-def env(tmp_path):
-    registry = Registry(f"sqlite:///{tmp_path / 'r.db'}")
+def env(tmp_path, monkeypatch):
+    # 环境注入：celery 任务的 _pipeline() 读全局 get_settings()，必须与夹具同源
+    settings = Settings(data_dir=tmp_path, embedding_backend="stub", embedding_dim=64)
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("RAG_DATABASE_URL", settings.database_url)
+    monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "stub")
+    monkeypatch.setenv("RAG_EMBEDDING_DIM", "64")
+    get_settings.cache_clear()
+    registry = Registry(settings.database_url)
     search_service = SearchService(
         store=InMemoryVectorStore(), registry=registry, embedder=StubEmbedder(dim=64)
     )
@@ -101,7 +108,8 @@ async def test_ingest_document_and_status(env, tmp_path):
 async def test_acl_enforced_in_mcp(env):
     registry, search_service, settings, kb = env
     other = registry.create_kb("受限库")
-    allowed_resolver = lambda: {kb.id}  # 仅技术库
+    def allowed_resolver():
+        return {kb.id}  # 仅技术库
 
     async with (
         await _session(env, allowed_resolver)

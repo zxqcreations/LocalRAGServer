@@ -6,6 +6,8 @@ Claude Code 配置示例（mcpServers）：
 """
 import asyncio
 
+from mcp.server.stdio import stdio_server
+
 from apps.mcp.server import build_mcp_server
 from core.config import get_settings
 from core.retrieval.embeddings import build_embedder
@@ -40,8 +42,14 @@ async def main() -> None:
     )
     search_service.ensure_ready()
     server = build_mcp_server(registry, search_service, settings)
-    async with server.run_stdio():
-        await asyncio.Event().wait()
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options(),
+        )
+    store.close()
+    registry.close()
 
 
 if __name__ == "__main__":

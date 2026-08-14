@@ -35,8 +35,12 @@ def test_ingest_chain_eager(tmp_path, monkeypatch):
     pipeline = IngestPipeline(registry, search_service, settings.data_dir / "ingest_work")
     monkeypatch.setattr(tasks_mod, "_pipeline", lambda: pipeline)
 
-    tasks_mod.app.conf.task_always_eager = True
-    tasks_mod.app.conf.task_eager_propagates = True
+    # 保存/还原全局 eager 配置，防止泄漏到后续测试
+    _prev_eager = tasks_mod.app.conf.task_always_eager
+    _prev_prop = tasks_mod.app.conf.task_eager_propagates
+    monkeypatch.setattr(tasks_mod.app.conf, "task_always_eager", True)
+    monkeypatch.setattr(tasks_mod.app.conf, "task_eager_propagates", True)
+    _ = (_prev_eager, _prev_prop)
 
     kb = registry.create_kb("库")
     doc = registry.create_document(kb.id, "d.md", "upload://d.md", "hash-1")
@@ -77,8 +81,8 @@ def test_ingest_chain_failure_sets_failed(tmp_path, monkeypatch):
     pipeline = IngestPipeline(registry, search_service, settings.data_dir / "ingest_work")
     monkeypatch.setattr(tasks_mod, "_pipeline", lambda: pipeline)
 
-    tasks_mod.app.conf.task_always_eager = True
-    tasks_mod.app.conf.task_eager_propagates = False  # 失败不向调用方传播
+    monkeypatch.setattr(tasks_mod.app.conf, "task_always_eager", True)
+    monkeypatch.setattr(tasks_mod.app.conf, "task_eager_propagates", False)
 
     kb = registry.create_kb("库")
     doc = registry.create_document(kb.id, "d.md", "upload://d.md", "hash-1")
