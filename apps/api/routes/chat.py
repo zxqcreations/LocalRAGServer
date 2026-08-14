@@ -85,7 +85,8 @@ def chat_completions(
         if not results or best_dense < settings.refusal_threshold:
             content = REFUSAL_TEXT
         else:
-            messages = build_rag_messages(question, [r.content for r in results])
+            # 生成用 parent 回填后的上下文（架构 §5：子块检索、父块入生成）
+            messages = build_rag_messages(question, [r.expanded_content for r in results])
             if body.stream:
                 return _stream_response(chat_client, model, messages)
             content = chat_client.chat(messages).content

@@ -6,7 +6,9 @@ from pathlib import Path
 from core.ingest.chunker import chunk_text
 from core.ingest.parsers import parse_file
 from core.retrieval.hybrid import HybridRetriever
+from core.retrieval.parent import expand_parents
 from core.retrieval.rerank import NoopReranker, Reranker
+from core.retrieval.router import route
 from core.storage.registry import Document, Registry
 from core.storage.vector import VectorPoint, VectorStore
 
@@ -22,7 +24,8 @@ class SearchResult:
     doc_title: str
     score: float  # 融合排序分（RRF）
     dense_score: float  # dense 语义相似度（拒答判定）
-    content: str
+    content: str  # 命中块原文
+    expanded_content: str  # parent 回填后的上下文（生成用，架构 §5/§6）
 
 
 class SearchService:
@@ -116,10 +119,20 @@ class SearchService:
 
     def _get_hybrid(self, kb_id: str) -> HybridRetriever:
         if kb_id not in self._hybrid_cache:
+            params = route(self._kb_type(kb_id))
             self._hybrid_cache[kb_id] = HybridRetriever(
-                self._store, self._registry, kb_id, rrf_k=60
+                self._store,
+                self._registry,
+                kb_id,
+                rrf_k=params.rrf_k,
+                dense_limit=params.dense_limit,
+                sparse_limit=params.sparse_limit,
             )
         return self._hybrid_cache[kb_id]
+
+    def _kb_type(self, kb_id: str) -> str:
+        kb = self._registry.get_kb(kb_id)
+        return kb.kb_type if kb is not None else "document"
 
     def _invalidate_hybrid(self, kb_id: str) -> None:
         self._hybrid_cache.pop(kb_id, None)
@@ -148,6 +161,10 @@ class SearchService:
         top_k_scores = [s for _, s in reranked]
         docs_by_chunk = self._registry.get_chunk_doc_map([h.chunk_id for h in top_k_hits])
         docs = self._registry.get_documents_by_ids(list(set(docs_by_chunk.values())))
+        # parent 回填（架构 §5/§6）：命中子块扩展相邻上下文
+        expanded = expand_parents(
+            self._registry, kb_id, [h.chunk_id for h in top_k_hits], target_size=2048
+        )
         results = []
         for h, rerank_score in zip(top_k_hits, top_k_scores, strict=True):
             doc_id = docs_by_chunk.get(h.chunk_id, "")
@@ -160,6 +177,7 @@ class SearchService:
                     score=rerank_score,
                     dense_score=h.dense_score if h.dense_score is not None else 0.0,
                     content=contents.get(h.chunk_id, ""),
+                    expanded_content=expanded.get(h.chunk_id, contents.get(h.chunk_id, "")),
                 )
             )
         return results[:top_k]

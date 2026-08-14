@@ -93,6 +93,7 @@ class SearchResultOut(BaseModel):
     score: float
     dense_score: float
     content: str
+    expanded_content: str
 
 
 # ---------- Chat（OpenAI 兼容 + RAG 扩展字段） ----------
