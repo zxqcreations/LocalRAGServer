@@ -6,6 +6,7 @@ from pathlib import Path
 from core.ingest.chunker import chunk_text
 from core.ingest.parsers import parse_file
 from core.retrieval.hybrid import HybridRetriever
+from core.retrieval.rerank import NoopReranker, Reranker
 from core.storage.registry import Document, Registry
 from core.storage.vector import VectorPoint, VectorStore
 
@@ -33,6 +34,9 @@ class SearchService:
         chunk_size: int = 512,
         overlap: int = 64,
         max_pdf_pages: int | None = None,
+        reranker: Reranker | None = None,
+        retrieval_top_k: int = 50,
+        rerank_top_k: int = 8,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -41,6 +45,9 @@ class SearchService:
         self._overlap = overlap
         self._max_pdf_pages = max_pdf_pages
         self._hybrid_cache: dict[str, HybridRetriever] = {}  # KB 级混合检索缓存
+        self._reranker = reranker or NoopReranker()
+        self._retrieval_top_k = retrieval_top_k
+        self._rerank_top_k = rerank_top_k
 
     def ensure_ready(self) -> None:
         self._store.ensure_collection(self._embedder.dim)
@@ -118,17 +125,31 @@ class SearchService:
         self._hybrid_cache.pop(kb_id, None)
 
     def search(self, kb_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
-        """混合检索（dense + BM25 → RRF，架构 §6）+ 正文回查；结果按融合分数降序。"""
+        """混合检索（dense + BM25 → RRF，架构 §6）→ 重排 → top-N 截断 → 正文回查。
+
+        score 语义：reranker 存在时 = 重排分数（排序用）；否则 = RRF 融合分数。
+        dense_score 恒为 dense 语义相似度（拒答判定用，审计 ARC-014）。
+        """
         vector = self._embedder.embed([query])[0]
-        hits = self._get_hybrid(kb_id).search(query, vector, top_k=top_k)
+        hits = self._get_hybrid(kb_id).search(query, vector, top_k=self._retrieval_top_k)
         if not hits:
             return []
         chunk_ids = [h.chunk_id for h in hits]
         contents = self._registry.get_chunk_contents(chunk_ids)
-        docs_by_chunk = self._registry.get_chunk_doc_map(chunk_ids)
+        # 重排（降级路径为 NoopReranker，保持融合序）
+        ordered_contents = [contents.get(cid, "") for cid in chunk_ids]
+        rerank_scores = self._reranker.rerank(query, ordered_contents)
+        reranked = sorted(
+            zip(hits, rerank_scores, strict=True),
+            key=lambda pair: pair[1],
+            reverse=True,
+        )[: self._rerank_top_k]
+        top_k_hits = [h for h, _ in reranked]
+        top_k_scores = [s for _, s in reranked]
+        docs_by_chunk = self._registry.get_chunk_doc_map([h.chunk_id for h in top_k_hits])
         docs = self._registry.get_documents_by_ids(list(set(docs_by_chunk.values())))
         results = []
-        for h in hits:
+        for h, rerank_score in zip(top_k_hits, top_k_scores, strict=True):
             doc_id = docs_by_chunk.get(h.chunk_id, "")
             doc = docs.get(doc_id)
             results.append(
@@ -136,12 +157,12 @@ class SearchService:
                     chunk_id=h.chunk_id,
                     doc_id=doc_id,
                     doc_title=doc.title if doc else "",
-                    score=h.score,
+                    score=rerank_score,
                     dense_score=h.dense_score if h.dense_score is not None else 0.0,
                     content=contents.get(h.chunk_id, ""),
                 )
             )
-        return results
+        return results[:top_k]
 
     def delete_document(self, kb_id: str, doc_id: str) -> None:
         """删除文档：先删向量再删注册表（保证查询不命中已删文档的 chunk）。"""

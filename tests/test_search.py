@@ -103,3 +103,40 @@ def test_delete_document_removes_vectors_and_rows(service, tmp_path):
     svc.delete_document(kb.id, doc.id)
     assert svc.search(kb.id, "删除", top_k=3) == []
     assert registry.get_document(kb.id, doc.id) is None
+
+
+def test_reranker_orders_and_truncates(service, tmp_path):
+    svc, registry = service
+    kb = registry.create_kb("库")
+
+    class KeywordReranker:
+        def rerank(self, query, documents):
+            return [2.0 if "量子" in d else 0.5 for d in documents]
+
+    from core.retrieval.embeddings import StubEmbedder
+    from core.retrieval.search import SearchService
+    from core.storage.vector import InMemoryVectorStore
+
+    reranked = SearchService(
+        store=InMemoryVectorStore(),
+        registry=registry,
+        embedder=StubEmbedder(dim=64),
+        reranker=KeywordReranker(),
+        retrieval_top_k=50,
+        rerank_top_k=3,
+    )
+    reranked.ensure_ready()
+    for name, text in (
+        ("a.md", "苹果是水果"),
+        ("b.md", "量子计算使用量子比特"),
+        ("c.md", "量子纠缠是物理现象"),
+        ("d.md", "香蕉也是水果"),
+    ):
+        reranked.ingest_file(kb.id, _make_doc(tmp_path, name, text))
+
+    results = reranked.search(kb.id, "量子相关", top_k=3)
+    assert len(results) == 3  # rerank_top_k 截断
+    # 含"量子"的两篇重排分数高，排在前两位
+    assert "量子" in results[0].content or results[0].doc_title in {"b.md", "c.md"}
+    scores = [r.score for r in results]
+    assert scores == sorted(scores, reverse=True)

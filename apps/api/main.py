@@ -13,6 +13,7 @@ from apps.api.schemas import err
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
 from core.retrieval.embeddings import build_embedder
+from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
 from core.storage.vector import QdrantVectorStore
@@ -57,6 +58,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             chunk_size=settings.chunk_size,
             overlap=settings.chunk_overlap,
             max_pdf_pages=settings.max_pdf_pages,
+            reranker=build_reranker(settings),
+            retrieval_top_k=settings.retrieval_top_k,
+            rerank_top_k=settings.rerank_top_k,
         )
         app.state.search_service.ensure_ready()
         app.state.chat_client = ChatClient(
