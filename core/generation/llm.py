@@ -72,5 +72,10 @@ class ChatClient:
                 if piece:
                     yield piece
 
+    @property
+    def client(self) -> httpx.Client:
+        """底层 httpx 客户端（探针连通性检测用）。"""
+        return self._client
+
     def close(self) -> None:
         self._client.close()

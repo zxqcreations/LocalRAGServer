@@ -35,6 +35,18 @@ def test_health(client):
     assert resp.json()["success"] is True
 
 
+def test_healthz_and_readyz(client):
+    # 探针免认证（审计 ARC-010）
+    hz = client.get("/healthz", headers={})
+    assert hz.status_code == 200
+    rz = client.get("/readyz", headers={})
+    assert rz.status_code == 200
+    checks = rz.json()["data"]["checks"]
+    assert checks["database"] == "ok"
+    assert checks["qdrant"] == "ok"
+    assert "embedder" in checks
+
+
 # ---------- 知识库 ----------
 
 

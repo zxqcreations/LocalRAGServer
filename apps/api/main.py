@@ -29,8 +29,8 @@ from core.storage.vector import QdrantVectorStore
 
 logger = logging.getLogger("local_rag_server")
 
-# 无需认证的路径（健康检查与 API 文档）
-_PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+# 无需认证的路径（健康检查/探针与 API 文档）
+_PUBLIC_PATHS = {"/health", "/healthz", "/readyz", "/docs", "/openapi.json", "/redoc"}
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -96,6 +96,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", tags=["运维"])
     def health():
         return {"success": True, "data": {"status": "ok"}, "error": None, "meta": None}
+
+    @app.get("/healthz", tags=["运维"])
+    def healthz():
+        """存活探针：进程在即 ok（审计 ARC-010）。"""
+        return {"success": True, "data": {"status": "ok"}, "error": None, "meta": None}
+
+    @app.get("/readyz", tags=["运维"])
+    def readyz():
+        """就绪探针：各依赖连通性逐项（审计 ARC-010/F-16 口径）。
+
+        database/qdrant 为关键依赖（失败 → 503 degraded）；
+        embedder/llm 失败降级记录但不阻断就绪判定。
+        """
+        checks: dict[str, str] = {}
+
+        def _check(name: str, fn) -> None:
+            try:
+                fn()
+                checks[name] = "ok"
+            except Exception as exc:
+                checks[name] = f"down: {type(exc).__name__}"
+
+        def _db() -> None:
+            app.state.registry.list_kbs()
+
+        def _qdrant() -> None:
+            app.state.vector_store.ensure_collection(settings.embedding_dim)
+
+        def _embedder() -> None:
+            if app.state.search_service.embedder.dim <= 0:
+                raise RuntimeError("embedder dim 无效")
+
+        def _llm() -> None:
+            app.state.chat_client.client.get("/models").raise_for_status()
+
+        _check("database", _db)
+        _check("qdrant", _qdrant)
+        _check("embedder", _embedder)
+        _check("llm", _llm)
+        critical_down = [k for k in ("database", "qdrant") if checks[k] != "ok"]
+        status = 503 if critical_down else 200
+        return JSONResponse(
+            status_code=status,
+            content={
+                "success": not critical_down,
+                "data": {
+                    "status": "ready" if not critical_down else "degraded",
+                    "checks": checks,
+                },
+                "error": None,
+                "meta": None,
+            },
+        )
 
     # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
 
