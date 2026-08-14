@@ -42,6 +42,22 @@ class SearchService:
     def ensure_ready(self) -> None:
         self._store.ensure_collection(self._embedder.dim)
 
+    @property
+    def store(self) -> VectorStore:
+        return self._store
+
+    @property
+    def embedder(self):
+        return self._embedder
+
+    @property
+    def chunk_size(self) -> int:
+        return self._chunk_size
+
+    @property
+    def overlap(self) -> int:
+        return self._overlap
+
     def ingest_file(
         self, kb_id: str, path: str | Path, title: str | None = None, source: str | None = None
     ) -> Document:

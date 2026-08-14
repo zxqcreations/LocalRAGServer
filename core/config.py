@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     llm_model: str = "Qwen3-8B-AWQ"
     llm_timeout: float = 120.0
 
+    # URL 摄取与 SSRF 防护（审计 F-10：防护与能力同批交付）
+    url_allowlist: str = ""  # 逗号分隔域名白名单；空 = 任意公网（解析后 IP 校验兜底）
+    url_fetch_max_bytes: int = 5 * 1024 * 1024
+    url_fetch_max_redirects: int = 3
+    url_fetch_timeout: float = 15.0
+    url_fetch_allow_loopback: bool = False  # 仅测试/开发：允许本机地址（生产必须 False）
+
+    # 任务队列（ADR-002：本机 filesystem 代理，生产切 Redis）
+    celery_broker_url: str = "filesystem://"
+
     # 认证（审计 F-01：最小认证骨架随第一批接口同批交付；KB 级 ACL 属 Phase 3）
     # 空值 => fail-closed：业务接口全部拒绝，仅 /health 开放
     api_key: str = ""

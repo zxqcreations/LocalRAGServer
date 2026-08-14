@@ -16,8 +16,9 @@ data/
 coverage.xml
 htmlcov/
 
-# 模型文件（本地缓存，通过 MANIFEST 管理）
+# 模型文件（本地缓存，通过 MANIFEST 管理；MANIFEST 本身入版本库）
 models/
+!models/MANIFEST.json
 
 # 日志
 *.log
@@ -28,3 +29,6 @@ models/
 
 # 机器特定配置
 .claude/settings.local.json
+
+# MinerU 中间产物（保留 *.md 金样样本）
+docs/perf/mineru_out/**/*.json

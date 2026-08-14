@@ -2,7 +2,7 @@
 
 本地大型 RAG 服务：供 Agent 调用的检索与生成基础设施。技术架构见 [docs/architecture.md](docs/architecture.md)。
 
-当前状态：**Phase 0（MVP）** —— 单文件同步摄取 + dense 检索 + OpenAI 兼容 RAG 生成。
+当前状态：**Phase 1 · 摄取管线**（异步状态机 + 批量导入 + URL 摄取 SSRF 防护 + MinerU 解析；PG 迁移演练待用户环境决策）。
 
 ## 快速开始
 
@@ -55,11 +55,31 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 ## 测试
 
 ```bash
-uv run pytest            # 全部 80 个测试（含真实 Qdrant 本地模式集成测试）
-uv run pytest --cov      # 覆盖率报告（门禁 ≥80%）
+uv run pytest            # 全部 173 个测试（含真实 Qdrant 本地模式集成测试）
+uv run pytest --cov      # 覆盖率报告（门禁 ≥80%，当前 93%）
 uv run python scripts/smoke.py        # 全链路冒烟（上传→检索→RAG 拒答→删除）
 uv run python -m eval.run_retrieval   # 评测集检索回归（recall@10 / MRR@10）
 ```
+
+## Phase 1 · 异步摄取
+
+```bash
+# 1. 启动 worker（Windows：pool=solo；另开终端）
+uv run python scripts/worker.py
+
+# 2. 批量导入目录（幂等键 (kb_id, content_hash)；10 万级文档按此路径）
+uv run python scripts/import_docs.py --kb <kb名称> --dir <目录>
+
+# 3. URL 摄取（SSRF 五层防护内置；返回 job_id）
+curl -X POST http://127.0.0.1:8000/api/v1/kb/{kb_id}/documents/url \
+  -H "Authorization: Bearer $RAG_API_KEY" -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# 4. 吞吐基准（报告落 docs/perf/；真实数据实测 2850 文档/小时）
+uv run python scripts/bench_ingest.py --dir <目录> --limit 100
+```
+
+状态机契约见 docs/design/ingest-state-machine.md；worker 形态与代理决策见 ADR-002。
 
 ## Windows 本机 GPU（Spike 实测，见 docs/spike/sm75-matrix.md）
 

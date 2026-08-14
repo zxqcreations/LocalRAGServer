@@ -58,3 +58,49 @@ def test_unsupported_extension_raises(tmp_path):
     p.write_text("x", encoding="utf-8")
     with pytest.raises(UnsupportedFormatError):
         parse_file(p)
+
+
+def _make_minimal_epub(path) -> None:
+    """构造最小合法 EPUB（zip 容器：mimetype + container.xml + 一个章节）。"""
+    import zipfile
+
+    container = (
+        '<?xml version="1.0"?><container version="1.0" '
+        'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    opf = (
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
+        'unique-identifier="id" version="3.0">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:title>Test Book</dc:title><dc:identifier id="id">test</dc:identifier>'
+        "</metadata><manifest><item id=\"c1\" href=\"chap1.xhtml\" "
+        'media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="c1"/></spine></package>'
+    )
+    chapter = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Ch1</title></head>'
+        "<body><h1>第一章</h1><p>这是教材第一章的正文内容。</p></body></html>"
+    )
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", container)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/chap1.xhtml", chapter)
+
+
+def test_parse_epub(tmp_path):
+    p = tmp_path / "textbook.epub"
+    _make_minimal_epub(p)
+    doc = parse_file(p)
+    assert doc.pages >= 1
+    assert "第一章" in doc.text
+    assert "教材" in doc.text
+
+
+def test_epub_signature_check():
+    from core.ingest.parsers import check_signature
+
+    assert check_signature(".epub", b"PK\x03\x04rest")
+    assert not check_signature(".epub", b"%PDF-1.7")

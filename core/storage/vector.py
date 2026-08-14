@@ -52,6 +52,8 @@ class VectorStore(Protocol):
 
     def delete_by_document(self, kb_id: str, doc_id: str) -> None: ...
 
+    def count(self, kb_id: str, doc_id: str) -> int: ...
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     na = math.sqrt(sum(x * x for x in a))
@@ -96,6 +98,13 @@ class InMemoryVectorStore:
             for pid, p in self._points.items()
             if not (p.payload.get("kb_id") == kb_id and p.payload.get("doc_id") == doc_id)
         }
+
+    def count(self, kb_id: str, doc_id: str) -> int:
+        return sum(
+            1
+            for p in self._points.values()
+            if p.payload.get("kb_id") == kb_id and p.payload.get("doc_id") == doc_id
+        )
 
 
 class QdrantVectorStore:
@@ -183,6 +192,19 @@ class QdrantVectorStore:
             ),
             wait=True,
         )
+
+    def count(self, kb_id: str, doc_id: str) -> int:
+        result = self._client.count(
+            collection_name=COLLECTION,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(key="kb_id", match=MatchValue(value=kb_id)),
+                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                ]
+            ),
+            exact=True,
+        )
+        return result.count
 
     def close(self) -> None:
         """释放本地嵌入模式的资源（进程退出前调用）。"""

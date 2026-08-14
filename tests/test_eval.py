@@ -30,3 +30,19 @@ def test_retrieval_regression_metrics_are_sound():
     assert 0.0 <= metrics["mrr@10"] <= 1.0
     for m in metrics["per_type"].values():
         assert m["total"] > 0
+
+
+def test_baseline_gate_passes_with_current_metrics():
+    from eval.run_retrieval import check_baseline, evaluate
+
+    metrics = evaluate(top_k=10)
+    ok, message = check_baseline(metrics)
+    assert ok, f"基线门禁应通过：{message}"
+
+
+def test_baseline_gate_blocks_regression():
+    from eval.run_retrieval import check_baseline
+
+    ok, message = check_baseline({"recall@10": 0.5, "mrr@10": 0.4})
+    assert not ok
+    assert "recall@10 下降" in message

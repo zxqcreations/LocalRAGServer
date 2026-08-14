@@ -521,7 +521,8 @@ flowchart LR
     <tbody>
       <tr><td>POST</td><td><code>/api/v1/kb</code></td><td>创建知识库（类型、解析配置）</td></tr>
       <tr><td>GET</td><td><code>/api/v1/kb/{id}</code></td><td>知识库详情（文档数、索引状态）</td></tr>
-      <tr><td>POST</td><td><code>/api/v1/kb/{id}/documents</code></td><td>上传文档（multipart）或提交 URL</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/kb/{id}/documents</code></td><td>上传文档（multipart，同步摄取）</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/kb/{id}/documents/url</code></td><td>URL 摄取（异步任务链，SSRF 五层防护）</td></tr>
       <tr><td>GET</td><td><code>/api/v1/kb/{id}/documents/{doc_id}</code></td><td>文档摄取状态（状态机进度）</td></tr>
       <tr><td>DELETE</td><td><code>/api/v1/kb/{id}/documents/{doc_id}</code></td><td>删除文档及全部 chunk</td></tr>
       <tr><td>POST</td><td><code>/api/v1/search</code></td><td>混合检索 + 重排，返回带引用 chunk</td></tr>

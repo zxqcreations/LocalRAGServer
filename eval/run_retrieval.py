@@ -8,6 +8,7 @@
 import argparse
 import sys
 import tempfile
+from pathlib import Path
 
 from core.retrieval.embeddings import StubEmbedder
 from core.retrieval.search import SearchService
@@ -80,9 +81,29 @@ def evaluate(top_k: int = 10, dim: int = 1024, chunk_size: int = 150) -> dict:
     }
 
 
+BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
+
+
+def check_baseline(metrics: dict, tolerance: float | None = None) -> tuple[bool, str]:
+    """基线回归检查（Phase 2 CI 门禁：指标低于基线减容差即失败）。"""
+    import json
+
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    tol = tolerance if tolerance is not None else baseline.get("tolerance", 0.05)
+    problems = []
+    for key in ("recall@10", "mrr@10"):
+        base = baseline["metrics"][key]
+        current = metrics[key]
+        if current < base - tol:
+            problems.append(f"{key} 下降：{base:.3f} -> {current:.3f}（容差 {tol}）")
+    ok = not problems
+    return ok, "；".join(problems) if problems else "基线通过"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="离线检索回归（recall@k / MRR@k）")
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--check-baseline", action="store_true", help="基线回归门禁（Phase 2 CI）")
     args = parser.parse_args()
     try:
         metrics = evaluate(top_k=args.top_k)
@@ -99,6 +120,10 @@ def main() -> int:
         f"[总体     ] recall@{top_k}={metrics[f'recall@{top_k}']:.3f} "
         f"mrr@{top_k}={metrics[f'mrr@{top_k}']:.3f}"
     )
+    if args.check_baseline:
+        ok, message = check_baseline(metrics)
+        print(f"[基线门禁] {message}")
+        return 0 if ok else 1
     return 0
 
 

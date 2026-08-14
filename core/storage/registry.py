@@ -14,9 +14,11 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 
 from sqlalchemy import delete
+from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from core.ingest.chunker import Chunk
+from core.ingest.state import Stage, assert_transition
 
 
 def _utcnow() -> datetime:
@@ -36,10 +38,27 @@ class Document(SQLModel, table=True):
     title: str
     source: str
     content_hash: str
-    status: str = Field(default="ready")  # ready | failed
+    # 状态机域（契约 §3）：uploaded|parsed|chunked|embedded|indexed|ready|failed
+    status: str = Field(default=Stage.UPLOADED.value)
     chunk_count: int = 0
     error: str | None = None
+    # 解析管线版本戳（审计 ARC-003：parser+chunker+embedder 三元组；策略变更后据此重索引）
+    pipeline_version: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class IngestJob(SQLModel, table=True):
+    """摄取任务（契约 §3：stage/attempt/error 持久化，进程崩溃可恢复）。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    doc_id: str = Field(index=True)
+    kb_id: str = Field(index=True)
+    stage: str = Field(default=Stage.UPLOADED.value, index=True)
+    attempt: int = 0
+    failed_at: str | None = None  # 失败发生阶段（恢复转移定位，契约实现细节）
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class ChunkRow(SQLModel, table=True):
@@ -53,7 +72,10 @@ class ChunkRow(SQLModel, table=True):
 
 class Registry:
     def __init__(self, database_url: str) -> None:
-        self._engine = create_engine(database_url)
+        # SQLite 用 NullPool：每次操作独立连接，避免测试/短生命周期进程中连接滞留；
+        # PG 保持默认连接池（生产路径）
+        kwargs = {"poolclass": NullPool} if database_url.startswith("sqlite") else {}
+        self._engine = create_engine(database_url, **kwargs)
         SQLModel.metadata.create_all(self._engine)
 
     def session(self) -> Iterator[Session]:
@@ -122,6 +144,15 @@ class Registry:
             rows = s.exec(select(Document).where(Document.id.in_(doc_ids))).all()  # type: ignore[attr-defined]
         return {r.id: r for r in rows}
 
+    def set_pipeline_version(self, doc_id: str, version: str) -> None:
+        with Session(self._engine) as s:
+            doc = s.get(Document, doc_id)
+            if doc is None:
+                raise LookupError(f"文档不存在：{doc_id}")
+            doc.pipeline_version = version
+            s.add(doc)
+            s.commit()
+
     def mark_document_failed(self, doc_id: str, error: str) -> None:
         with Session(self._engine) as s:
             doc = s.get(Document, doc_id)
@@ -176,3 +207,49 @@ class Registry:
     def count_documents(self, kb_id: str) -> int:
         with Session(self._engine) as s:
             return len(s.exec(select(Document).where(Document.kb_id == kb_id)).all())
+
+    # ---------- 摄取任务（状态机） ----------
+
+    def create_job(self, doc_id: str, kb_id: str) -> IngestJob:
+        job = IngestJob(doc_id=doc_id, kb_id=kb_id)
+        with Session(self._engine) as s:
+            s.add(job)
+            s.commit()
+            s.refresh(job)
+        return job
+
+    def get_job(self, job_id: str) -> IngestJob | None:
+        with Session(self._engine) as s:
+            return s.get(IngestJob, job_id)
+
+    def transition_job(self, job_id: str, to: Stage, error: str | None = None) -> None:
+        """状态转移（契约 §2.1：非法转移拒绝；§2.2：阶段幂等由调用方先查状态）。
+
+        同步更新 document.status；failed 转移记录 attempt 与 error。
+        """
+        with Session(self._engine) as s:
+            job = s.get(IngestJob, job_id)
+            if job is None:
+                raise LookupError(f"任务不存在：{job_id}")
+            frm = Stage(job.stage)
+            if frm == to:  # 契约 v1.1：同状态转移为幂等 no-op（恢复后阶段方法重入）
+                return
+            assert_transition(frm, to)
+            job.stage = to.value
+            job.updated_at = _utcnow()
+            if to == Stage.FAILED:
+                job.attempt += 1
+                job.failed_at = frm.value
+                job.error = error
+            elif frm == Stage.FAILED:
+                job.error = None  # 恢复后清错误
+            doc = s.get(Document, job.doc_id)
+            if doc is not None:
+                doc.status = to.value
+                if to == Stage.FAILED:
+                    doc.error = error
+                elif frm == Stage.FAILED:
+                    doc.error = None
+                s.add(doc)
+            s.add(job)
+            s.commit()

@@ -82,15 +82,15 @@
 
 | # | 行动 | 状态 |
 |---|---|---|
-| P0-1 | git init + 受保护 main + .gitignore 补漏（.coverage/models/.claude/settings.local.json 等） | 待办 |
+| P0-1 | git init + 受保护 main + .gitignore 补漏（.coverage/models/.claude/settings.local.json 等） | **完成**（v0.1.0 已推送） |
 | P0-2 | **硬件 Spike**：实机验证 vLLM 钉版 / llama.cpp GGUF / TEI turing- 三路径，出 SM75 兼容矩阵 + 生成后端 ADR | **完成**：sm75-matrix.md + ADR-001（llama.cpp 实测 29.7 t/s；vLLM 原生 Windows 不可行；TEI 留待 Linux） |
-| P0-3 | 配置整改：LLM 默认端点改 9001 或 fail-fast；路径从 data_dir 派生；补检索参数（top_k/RRF/HNSW/chunk）；非 stub 后端启动校验 Key；Python 版本钉 3.13 | 待办 |
-| P0-4 | 测试基座：dev 补 pyright/bandit/pip-audit/pytest-asyncio；conftest autouse 隔离 fixture（env 强制 + cache_clear + 外联护栏）；stub 升级 n-gram 语义化 | 部分（pytest-cov/覆盖率已落地） |
-| P0-5 | CI 三层流水线（PR 快速层 / main 回归层 / GPU nightly 层，Python 3.11+3.13 + Windows） | 待办 |
-| P0-6 | 安全最小骨架：Bearer Key 中间件 + fail-closed + host 变更警告；上传校验（UUID 键/MIME 魔数/大小/MAX_PDF_PAGES）；错误码目录 + 全局异常处理器 | 部分（异常信封已落地，认证待办） |
-| P0-7 | 架构补「备份与灾备」「模型注册表+pipeline_version+双 collection 切换」章节 | **本轮完成**（见 architecture.md v1.1） |
-| P0-8 | eval/ 目录 + qa.jsonl 种子 ≥50 条（锚定 doc_id/chunk_id + is_hard）+ 评测集版本化方案 | 待办 |
-| P0-9 | docs/audit/ 制度固化 + S0-S3 成文 + 冒烟脚本回归基线 | **本轮完成**（本文档 + docs/audit/） |
+| P0-3 | 配置整改：LLM 默认端点改 9001 或 fail-fast；路径从 data_dir 派生；补检索参数（top_k/RRF/HNSW/chunk）；非 stub 后端启动校验 Key；Python 版本钉 3.13 | **完成**（含未知 RAG_* env fail-fast） |
+| P0-4 | 测试基座：dev 补 pyright/bandit/pip-audit/pytest-asyncio；conftest autouse 隔离 fixture（env 强制 + cache_clear + 外联护栏）；stub 升级 n-gram 语义化 | **完成**（五门禁全零 + 语义化 stub + respx 护栏） |
+| P0-5 | CI 三层流水线（PR 快速层 / main 回归层 / GPU nightly 层，Python 3.11+3.13 + Windows） | **完成**（.github/workflows/ci.yml；真实运行随推送） |
+| P0-6 | 安全最小骨架：Bearer Key 中间件 + fail-closed + host 变更警告；上传校验（UUID 键/MIME 魔数/大小/MAX_PDF_PAGES）；错误码目录 + 全局异常处理器 | **完成** |
+| P0-7 | 架构补「备份与灾备」「模型注册表+pipeline_version+双 collection 切换」章节 | **完成**（architecture.md v1.1/v1.2；pipeline_version 已实现） |
+| P0-8 | eval/ 目录 + qa.jsonl 种子 ≥50 条（锚定 doc_id/chunk_id + is_hard）+ 评测集版本化方案 | **完成**（50 条锚定集 + 回归脚本 recall@10=0.880） |
+| P0-9 | docs/audit/ 制度固化 + S0-S3 成文 + 冒烟脚本回归基线 | **完成**（13 轮审计记录 + 冒烟/评测回归基线） |
 
 ### 5.3 已验证发现登记册（按处置阶段）
 

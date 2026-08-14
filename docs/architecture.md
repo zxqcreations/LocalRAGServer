@@ -1,6 +1,6 @@
 # LocalRAGServer 技术架构设计
 
-> 版本 v1.1 · 2026-08-14（v1.1 变更：Profile D、Turing 兼容性、Phase 6 生产就绪、§18 备份与灾备——源自 ultracode 基线审计，见 docs/quality.md）
+> 版本 v1.2 · 2026-08-14（v1.2 变更：Phase 1 实测数据回填——异步摄取管线/批量导入 2850 文档小时/MinerU 质量与大文档结论/ADR-002 worker 形态）
 > 输入约束：NVIDIA GPU 8~16GB 单机（实机 RTX 2080 Ti 11GB，Turing SM75）· 十万级文档（≈千万级 chunk）· PDF/Office/代码/网页 · 中英混合 · 服务对象为 Agent（MCP + REST）+ 人工管理端（Web）
 
 ## 1. 目标与定位
@@ -137,7 +137,7 @@ flowchart LR
 
 要点：
 
-1. **文档生命周期状态机**：`uploaded → parsed → chunked → embedded → indexed → ready / failed`，每阶段落 Postgres，任务失败可重试、可断点续传
+1. **文档生命周期状态机**：`uploaded → parsed → chunked → embedded → indexed → ready / failed`，每阶段落库，可重试、断点续传（**已实现**，契约 docs/design/ingest-state-machine.md v1.1；Celery 任务链 + 失败恢复 + DLQ 语义）
 2. **幂等与增量**：文件内容哈希去重；chunk 哈希变化才重新嵌入；网页按 URL + 抓取时间做增量 upsert，源站删除则清理
 3. **parent-child 分块**：子块（≈512 token）用于检索，命中后回填父块（≈2048 token）送入生成，兼顾召回精度与上下文完整
 4. **代码专用策略**：按函数/类切分，chunk 头注入 `repo#path#symbol` 与 docstring；支持按仓库过滤
@@ -212,6 +212,8 @@ flowchart LR
 | 解析 | MinerU 1~3 s/页（CPU）→ 数十万页需数天，**解析是真正瓶颈**，须多 Worker 横向扩展、支持分批导入 |
 | 在线查询 | 混合检索 + 重排端到端 P95 < 500ms（目标） |
 | 生成 | 实测（Spike，见 docs/spike/sm75-matrix.md）：Qwen3-8B Q4_K_M via llama.cpp = **Prompt 74 t/s · 解码 29.7 t/s**；vLLM 钉版口径待 Linux 验证 |
+| 摄取（管线开销） | 实测（真实领域 MD ×100）：**2850 文档/小时 · 149.6 chunk/s**（stub 嵌入口径，docs/perf/ingest-bench-20260814.md）；bge-m3 GPU 嵌入 141 条/s（Spike） |
+| 深度解析 | MinerU 3.4.5 小文献质量优异（公式/结构/DOI 完整）；**534MB/765 页教材单机 CPU >1.5h 未完成 → 大文档走 pymupdf 快速通道或分批并行 worker**（docs/perf/parsing-eval-20260814.md） |
 
 ## 9. API 与 MCP 设计
 

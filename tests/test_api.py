@@ -122,6 +122,19 @@ def test_upload_duplicate_is_idempotent(client):
     assert listing["meta"]["total"] == 1
 
 
+def test_document_list_and_detail(client):
+    kb_id = _create_kb(client)
+    doc = client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file()).json()["data"]
+    listing = client.get(f"/api/v1/kb/{kb_id}/documents").json()
+    assert listing["success"] and listing["meta"]["total"] == 1
+    detail = client.get(f"/api/v1/kb/{kb_id}/documents/{doc['id']}").json()
+    assert detail["data"]["title"] == "note.md"
+    assert detail["data"]["status"] == "ready"
+    missing = client.get(f"/api/v1/kb/{kb_id}/documents/nonexistent")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "doc_not_found"
+
+
 # ---------- 检索 ----------
 
 
@@ -129,6 +142,54 @@ def test_search_unknown_kb_404(client):
     resp = client.post("/api/v1/search", json={"query": "x", "kb_id": "nope"})
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "kb_not_found"
+
+
+# ---------- URL 摄取 + SSRF ----------
+
+
+def test_ingest_url_ssrf_blocked(client, fake_site):
+    # 默认 allow_loopback=False：本机地址被 SSRF 防护拦截（审计 F-10）
+    kb_id = _create_kb(client)
+    resp = client.post(f"/api/v1/kb/{kb_id}/documents/url", json={"url": fake_site.url})
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "ssrf_blocked"
+
+
+def test_ingest_url_endpoint(tmp_path, fake_site, auth_headers, monkeypatch):
+    from core.ingest import tasks as tasks_mod
+    from core.ingest.pipeline import IngestPipeline
+
+    settings = Settings(
+        data_dir=tmp_path / "data3",
+        qdrant_path=tmp_path / "qdrant3",
+        database_url=f"sqlite:///{tmp_path / 'r3.db'}",
+        embedding_backend="stub",
+        embedding_dim=64,
+        api_key=auth_headers["Authorization"].removeprefix("Bearer "),
+        url_fetch_allow_loopback=True,  # 测试开关：本机假网站
+    )
+    app = create_app(settings)
+    with TestClient(app, headers=auth_headers) as c:
+        # 用应用自身服务构建共享管线（同一 Qdrant 客户端，避免本地模式目录锁冲突）
+        pipeline = IngestPipeline(
+            app.state.registry,
+            app.state.search_service,
+            settings.data_dir / "ingest_work",
+        )
+        monkeypatch.setattr(tasks_mod, "_pipeline", lambda: pipeline)
+        tasks_mod.app.conf.task_always_eager = True
+        tasks_mod.app.conf.task_eager_propagates = True
+
+        kb_id = c.post("/api/v1/kb", json={"name": "web库"}).json()["data"]["id"]
+        resp = c.post(f"/api/v1/kb/{kb_id}/documents/url", json={"url": fake_site.url})
+        assert resp.status_code == 202
+        doc_id = resp.json()["data"]["doc_id"]
+        # eager 模式下任务链已执行完毕
+        assert app.state.registry.get_document(kb_id, doc_id).status == "ready"
+        hits = c.post(
+            "/api/v1/search", json={"query": "正文内容", "kb_id": kb_id, "top_k": 3}
+        ).json()["data"]
+        assert hits and hits[0]["doc_title"] == "测试"
 
 
 # ---------- Chat ----------

@@ -8,16 +8,17 @@ from typing import cast
 
 import pymupdf  # PyMuPDF（新版模块名）
 
-# 文本类（无魔数）；代码类 MVP 按纯文本摄取（tree-sitter 结构感知分块属 Phase 2）
-_TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
+# 文本类（无魔数）；代码类 MVP 按纯文本摄取（tree-sitter 结构感知分块属 Phase 2）；
+# epub 由 PyMuPDF 按文档解析（XHTML 页语义），与 pdf 同走 _parse_document
+_TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".html", ".htm"}
 CODE_SUFFIXES = {
     ".py", ".js", ".ts", ".go", ".rs", ".java", ".c", ".cpp", ".h",
     ".sh", ".toml", ".yaml", ".yml", ".json",
 }
-SUPPORTED_SUFFIXES = _TEXT_SUFFIXES | CODE_SUFFIXES | {".pdf"}
+SUPPORTED_SUFFIXES = _TEXT_SUFFIXES | CODE_SUFFIXES | {".pdf", ".epub"}
 
-# 文件头魔数（.txt/.md 无魔数，返回 True）
-_MAGIC_HEADERS: dict[str, bytes] = {".pdf": b"%PDF"}
+# 文件头魔数（.txt/.md 无魔数，返回 True）；.epub 为 ZIP 容器
+_MAGIC_HEADERS: dict[str, bytes] = {".pdf": b"%PDF", ".epub": b"PK\x03\x04"}
 
 
 class UnsupportedFormatError(ValueError):
@@ -49,16 +50,17 @@ def parse_file(path: str | Path, max_pages: int | None = None) -> ParsedDocument
         raise UnsupportedFormatError(
             f"暂不支持格式 {suffix or '(无扩展名)'}：{p.name}（当前支持 {supported}）"
         )
-    if suffix == ".pdf":
-        return _parse_pdf(p, max_pages)
+    if suffix in {".pdf", ".epub"}:
+        return _parse_document(p, max_pages)
     return ParsedDocument(title=p.stem, text=p.read_text(encoding="utf-8", errors="replace"))
 
 
-def _parse_pdf(path: Path, max_pages: int | None) -> ParsedDocument:
+def _parse_document(path: Path, max_pages: int | None) -> ParsedDocument:
+    """PDF/EPUB 统一文档解析（PyMuPDF；epub 的页即 XHTML 章节页）。"""
     with pymupdf.open(path) as doc:
         if max_pages is not None and doc.page_count > max_pages:
             raise TooManyPagesError(
-                f"PDF 页数超限：{doc.page_count} 页 > 上限 {max_pages} 页"
+                f"文档页数超限：{doc.page_count} 页 > 上限 {max_pages} 页"
             )
         # get_text() 无参数时恒返回 str（typeshed 声明过宽，显式收窄）
         pages = [cast(str, page.get_text()) for page in doc]

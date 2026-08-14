@@ -47,8 +47,8 @@ jobs:
         run: >
           uv run python -c "from eval.dataset import load_qa, validate_dataset; import sys;
           es = validate_dataset(load_qa()); print(es); sys.exit(1 if es else 0)"
-      - name: 检索回归（recall@10 / MRR@10 报告）
-        run: uv run python -m eval.run_retrieval
+      - name: 检索回归（recall@10 / MRR@10 报告 + 基线门禁）
+        run: uv run python -m eval.run_retrieval --check-baseline
 
   gpu-nightly:
     name: GPU 实测（自托管 runner，手动触发）

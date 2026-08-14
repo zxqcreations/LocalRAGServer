@@ -64,6 +64,17 @@ class DocumentOut(BaseModel):
     created_at: datetime
 
 
+class UrlIngestRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class JobOut(BaseModel):
+    id: str
+    doc_id: str
+    stage: str
+    attempt: int
+
+
 # ---------- 检索 ----------
 
 

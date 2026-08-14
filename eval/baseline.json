@@ -1,0 +1,10 @@
+{
+  "dataset_version": "v1",
+  "embedder": "stub（哈希袋，开发级基线；Phase 2 换 bge-m3 后重定权威基线）",
+  "evaluated_at": "2026-08-14",
+  "metrics": {
+    "recall@10": 0.88,
+    "mrr@10": 0.709
+  },
+  "tolerance": 0.05
+}

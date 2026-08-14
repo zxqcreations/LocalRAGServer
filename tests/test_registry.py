@@ -21,7 +21,7 @@ def test_document_lifecycle(tmp_path):
     reg = _make_reg(tmp_path)
     kb = reg.create_kb("kb")
     doc = reg.create_document(kb.id, "note.md", "upload://note.md", "hash-1")
-    assert doc.status == "ready"
+    assert doc.status == "uploaded"  # 状态机契约：文档初始为 uploaded（异步管线）
     assert reg.get_document(kb.id, doc.id).title == "note.md"
     # 跨库访问隔离
     other = reg.create_kb("other")

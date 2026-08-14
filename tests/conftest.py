@@ -49,6 +49,44 @@ def fake_llm_server():
     server.shutdown()
 
 
+class FakeSiteHandler(BaseHTTPRequestHandler):
+    """可编程假网站（SSRF/URL 摄取测试用）。"""
+
+    body = b"<html><head><title>T</title></head><body><p>default</p></body></html>"
+    status = 200
+    location = None
+
+    def do_GET(self):
+        if self.location:
+            self.send_response(302)
+            self.send_header("Location", self.location)
+            self.end_headers()
+            return
+        self.send_response(self.status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def fake_site():
+    FakeSiteHandler.location = None
+    FakeSiteHandler.status = 200
+    FakeSiteHandler.body = (
+        "<html><head><title>测试</title></head><body><p>正文内容。</p>"
+        "<script>bad()</script></body></html>"
+    ).encode()
+    server = HTTPServer(("127.0.0.1", 0), FakeSiteHandler)
+    server.url = f"http://127.0.0.1:{server.server_port}/page"  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+
+
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {API_KEY}"}

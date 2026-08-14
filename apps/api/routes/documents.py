@@ -1,4 +1,5 @@
-"""文档路由：上传、列表、状态查询、删除（MVP 为同步摄取，Phase 1 换 Celery 异步）。"""
+"""文档路由：上传（同步）、URL 摄取（异步，SSRF 防护）、列表、状态查询、删除。"""
+import hashlib
 import tempfile
 from pathlib import Path
 from typing import Annotated
@@ -9,14 +10,16 @@ from apps.api.deps import get_registry, get_search_service, get_settings
 from apps.api.errors import (
     DOC_NOT_FOUND,
     EMPTY_DOCUMENT,
+    FETCH_FAILED,
     INVALID_FILE_CONTENT,
     KB_NOT_FOUND,
     PAYLOAD_TOO_LARGE,
+    SSRF_BLOCKED,
     TOO_MANY_PAGES,
     UNSUPPORTED_FORMAT,
     raise_http,
 )
-from apps.api.schemas import DocumentOut, Envelope, ok
+from apps.api.schemas import DocumentOut, Envelope, JobOut, UrlIngestRequest, ok
 from core.config import Settings
 from core.ingest.parsers import (
     SUPPORTED_SUFFIXES,
@@ -24,7 +27,9 @@ from core.ingest.parsers import (
     UnsupportedFormatError,
     check_signature,
 )
+from core.ingest.tasks import enqueue_ingest
 from core.retrieval.search import EmptyDocumentError, SearchService
+from core.security.ssrf import FetchError, SsrfBlockedError, UrlFetcher
 from core.storage.registry import Registry
 
 router = APIRouter()
@@ -87,6 +92,42 @@ def upload_document(
     finally:
         dest.unlink(missing_ok=True)
     return ok(DocumentOut.model_validate(doc))
+
+
+@router.post(
+    "/kb/{kb_id}/documents/url", response_model=Envelope[JobOut], status_code=202
+)
+def ingest_url(
+    kb_id: str,
+    body: UrlIngestRequest,
+    registry: RegistryDep,
+    settings: SettingsDep,
+):
+    """URL 摄取（异步管线）：SSRF 防护与能力同批交付（审计 F-10）。"""
+    _require_kb(registry, kb_id)
+    allowlist = {d.strip() for d in settings.url_allowlist.split(",") if d.strip()}
+    fetcher = UrlFetcher(
+        allowlist=allowlist,
+        max_redirects=settings.url_fetch_max_redirects,
+        max_bytes=settings.url_fetch_max_bytes,
+        timeout=settings.url_fetch_timeout,
+        allow_loopback=settings.url_fetch_allow_loopback,
+    )
+    try:
+        result = fetcher.fetch(body.url)
+    except SsrfBlockedError as exc:
+        raise_http(403, SSRF_BLOCKED, str(exc))
+    except FetchError as exc:
+        raise_http(502, FETCH_FAILED, str(exc))
+
+    content_hash = hashlib.sha256(result.content.encode("utf-8")).hexdigest()
+    doc = registry.create_document(kb_id, result.title, result.final_url, content_hash)
+    job = registry.create_job(doc.id, kb_id)
+    work = settings.data_dir / "ingest_work" / job.id
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "source.html").write_text(result.content, encoding="utf-8")
+    enqueue_ingest(job.id)
+    return ok(JobOut(id=job.id, doc_id=doc.id, stage=job.stage, attempt=job.attempt))
 
 
 @router.get("/kb/{kb_id}/documents", response_model=Envelope[list[DocumentOut]])
