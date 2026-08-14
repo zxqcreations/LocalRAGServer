@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from secrets import compare_digest
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,7 +18,8 @@ from apps.api.errors import (
     AUTH_UNCONFIGURED,
     RATE_LIMITED,
 )
-from apps.api.routes import chat, documents, kb, search
+from apps.api.routes import admin, chat, documents, kb, search
+from apps.api.routes.admin import COOKIE_NAME
 from apps.api.schemas import err
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
@@ -27,6 +29,7 @@ from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
 from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
+from core.security.admin import generate_initial_password, hash_password, hash_session
 from core.security.ratelimit import build_limiter
 from core.storage.registry import Registry
 from core.storage.vector import QdrantVectorStore
@@ -59,6 +62,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.limiter = build_limiter()
         app.state.metrics = MetricsCollector()
         configure_logging()
+        # 初始 admin 密码（web-admin-auth.md §1：一次性生成，首次登录强制修改）
+        initial_pw = generate_initial_password()
+        app.state.registry.ensure_admin_user("admin", hash_password(initial_pw))
+        initial_file = settings.data_dir / "admin_initial_password"
+        if not initial_file.exists():
+            initial_file.write_text(initial_pw, encoding="utf-8")
+            logger.warning("初始管理密码已生成：%s（首次登录后强制修改）", initial_pw)
         embedder = build_embedder(settings)
         app.state.vector_store = QdrantVectorStore(
             url=settings.qdrant_url,
@@ -98,6 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(documents.router, prefix="/api/v1", tags=["文档"])
     app.include_router(search.router, prefix="/api/v1", tags=["检索"])
     app.include_router(chat.router, prefix="/v1", tags=["Chat"])
+    app.include_router(admin.router, tags=["管理端"])
 
     @app.get("/health", tags=["运维"])
     def health():
@@ -173,10 +184,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.metrics.incr(f"api.status.{response.status_code}")
         return response
 
+    # ---- 管理端会话认证（web-admin-auth.md：与 API Key 通道彻底隔离） ----
+
     # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
+        if request.url.path.startswith("/admin/"):
+            return await call_next(request)  # 管理路由归 admin 中间件全权处理（通道隔离）
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
         if not settings.api_key:
@@ -219,6 +234,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
             )
         return await call_next(request)
+
+    @app.middleware("http")
+    async def admin_middleware(request: Request, call_next):
+        if not request.url.path.startswith("/admin/"):
+            return await call_next(request)
+        # 通道隔离：管理路由显式拒绝 API Key
+        if request.headers.get("Authorization", "").startswith("Bearer "):
+            return JSONResponse(
+                status_code=403,
+                content=err("channel_isolated", "管理端仅接受会话认证，不接受 API Key"),
+            )
+        # 登录限流（web-admin-auth.md §1：per-IP + 通用配额）
+        ip = request.client.host if request.client else "unknown"
+        if request.url.path.endswith("/login") and not app.state.limiter.allow(
+            f"admin-login:{ip}", 10, 10.0 / 60.0
+        ):
+            return JSONResponse(
+                status_code=429, content=err(RATE_LIMITED, "登录尝试过于频繁，请稍后重试")
+            )
+        session_id = request.cookies.get(COOKIE_NAME, "")
+        if session_id:
+            session_record = app.state.registry.find_admin_session(hash_session(session_id))
+            if session_record is not None and session_record.expires_at > datetime.now(UTC).replace(tzinfo=None):
+                admin_user = app.state.registry.get_admin_user_by_id(session_record.user_id)
+                if admin_user is not None:
+                    request.state.admin_user = admin_user
+                    request.state.admin_session_hash = session_record.session_hash
+        def _apply_session_cookie(response, req: Request):
+            # 会话 Cookie 下发/清除（登录/登出路由通过 request.state 通知）
+            if hasattr(req.state, "new_session_cookie"):
+                name, value, kwargs = req.state.new_session_cookie
+                response.set_cookie(name, value, **kwargs)
+            if getattr(req.state, "clear_session_cookie", False):
+                response.delete_cookie(COOKIE_NAME, path="/admin")
+            return response
+
+        if getattr(request.state, "admin_user", None) is None:
+            if request.url.path.endswith("/login"):
+                # 登录端点本身免会话，但仍需 Cookie 下发后处理
+                return _apply_session_cookie(await call_next(request), request)
+            return JSONResponse(
+                status_code=401, content=err("admin_unauthorized", "请先登录管理端")
+            )
+        # CSRF：状态变更请求校验 token（登录响应下发 csrf_token，前端以 X-CSRF-Token 头回传）
+        if request.method in {"POST", "PUT", "DELETE"} and not request.url.path.endswith("/login"):
+            token = request.headers.get("X-CSRF-Token", "")
+            if not token or not compare_digest(token, session_id):
+                return JSONResponse(
+                    status_code=403, content=err("csrf_failed", "CSRF token 校验失败")
+                )
+        return _apply_session_cookie(await call_next(request), request)
 
     # ---- 统一异常信封 ----
 

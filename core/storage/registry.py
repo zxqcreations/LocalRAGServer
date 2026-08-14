@@ -62,6 +62,27 @@ class ApiKey(SQLModel, table=True):
     last_used_at: datetime | None = None
 
 
+class AdminUser(SQLModel, table=True):
+    """管理端用户（web-admin-auth.md：admin/readonly 两档 RBAC）。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    password_hash: str  # Argon2id（人类口令专用档，审计 M-6）
+    role: str = Field(default="admin")  # admin | readonly
+    must_change_password: bool = True  # 首次登录强制改密
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class AdminSession(SQLModel, table=True):
+    """管理会话（session_id 哈希存储；闲置 30 分钟失效）。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    user_id: str = Field(index=True)
+    session_hash: str = Field(index=True)  # 只存哈希（会话 Cookie 泄露不直接可用）
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class AuditLog(SQLModel, table=True):
     """审计日志（acl-enforcement.md §5 / 审计 F-05）：只追加不修改。"""
 
@@ -309,6 +330,10 @@ class Registry:
             s.exec(delete(ApiKey).where(ApiKey.id == key_id))  # type: ignore[arg-type]
             s.commit()
 
+    def list_api_keys(self) -> list[ApiKey]:
+        with Session(self._engine) as s:
+            return list(s.exec(select(ApiKey).order_by(ApiKey.created_at)))
+
     def get_api_key(self, key_id: str) -> ApiKey | None:
         with Session(self._engine) as s:
             return s.get(ApiKey, key_id)
@@ -328,6 +353,73 @@ class Registry:
         )
         with Session(self._engine) as s:
             s.add(entry)
+            s.commit()
+
+    # ---------- 管理端（web-admin-auth.md） ----------
+
+    def ensure_admin_user(
+        self, username: str, password_hash: str, role: str = "admin"
+    ) -> AdminUser:
+        """幂等创建管理用户（已存在则返回既有记录）。"""
+        with Session(self._engine) as s:
+            existing = s.exec(
+                select(AdminUser).where(AdminUser.username == username)  # type: ignore[arg-type]
+            ).first()
+            if existing is not None:
+                return existing
+            user = AdminUser(username=username, password_hash=password_hash, role=role)
+            s.add(user)
+            s.commit()
+            s.refresh(user)
+            return user
+
+    def get_admin_user_by_id(self, user_id: str) -> AdminUser | None:
+        with Session(self._engine) as s:
+            return s.get(AdminUser, user_id)
+
+    def get_admin_user(self, username: str) -> AdminUser | None:
+        with Session(self._engine) as s:
+            return s.exec(
+                select(AdminUser).where(AdminUser.username == username)  # type: ignore[arg-type]
+            ).first()
+
+    def set_admin_password(self, user_id: str, password_hash: str) -> None:
+        with Session(self._engine) as s:
+            user = s.get(AdminUser, user_id)
+            if user is None:
+                raise LookupError(f"管理用户不存在：{user_id}")
+            user.password_hash = password_hash
+            user.must_change_password = False
+            s.add(user)
+            s.commit()
+
+    def set_admin_initial_password(self, user_id: str, password_hash: str) -> None:
+        """测试/引导用：重置密码但保留强制改密标记（契约：初始密码必须走改密流程）。"""
+        with Session(self._engine) as s:
+            user = s.get(AdminUser, user_id)
+            if user is None:
+                raise LookupError(f"管理用户不存在：{user_id}")
+            user.password_hash = password_hash
+            user.must_change_password = True
+            s.add(user)
+            s.commit()
+
+    def create_admin_session(self, user_id: str, session_hash: str, expires_at: datetime) -> None:
+        with Session(self._engine) as s:
+            s.add(
+                AdminSession(user_id=user_id, session_hash=session_hash, expires_at=expires_at)
+            )
+            s.commit()
+
+    def find_admin_session(self, session_hash: str) -> AdminSession | None:
+        with Session(self._engine) as s:
+            return s.exec(
+                select(AdminSession).where(AdminSession.session_hash == session_hash)  # type: ignore[arg-type]
+            ).first()
+
+    def revoke_admin_session(self, session_hash: str) -> None:
+        with Session(self._engine) as s:
+            s.exec(delete(AdminSession).where(AdminSession.session_hash == session_hash))  # type: ignore[arg-type]
             s.commit()
 
     def list_audit(self, limit: int = 50) -> list[AuditLog]:
