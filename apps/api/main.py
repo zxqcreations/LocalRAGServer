@@ -13,6 +13,7 @@ from apps.api.errors import (
     AUTH_INVALID,
     AUTH_REQUIRED,
     AUTH_UNCONFIGURED,
+    RATE_LIMITED,
 )
 from apps.api.routes import chat, documents, kb, search
 from apps.api.schemas import err
@@ -22,6 +23,7 @@ from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
 from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
+from core.security.ratelimit import build_limiter
 from core.storage.registry import Registry
 from core.storage.vector import QdrantVectorStore
 
@@ -50,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "已配置" if settings.api_key else "未配置（fail-closed）",
             )
         app.state.registry = Registry(settings.database_url)
+        app.state.limiter = build_limiter()
         embedder = build_embedder(settings)
         app.state.vector_store = QdrantVectorStore(
             url=settings.qdrant_url,
@@ -116,6 +119,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 1) 引导主 Key（settings.api_key）：全权限，Phase 4 Web 端接管签发
         if compare_digest(raw_key, settings.api_key):
             request.state.allowed_kbs = "*"
+            request.state.actor = "master"
+            if not app.state.limiter.allow("key:master", 120, 2.0):
+                return JSONResponse(
+                    status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
+                )
             return await call_next(request)
         # 2) api_keys 表 Key：scrypt 验证 + ACL 解析（F-13 强制点）
         record = app.state.registry.verify_api_key(raw_key)
@@ -123,6 +131,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(status_code=401, content=err(AUTH_INVALID, "API Key 无效"))
         request.state.allowed_kbs = resolve_allowed_kb_ids(json.loads(record.kb_acl))
         request.state.api_key_record = record
+        request.state.actor = record.id
+        if not app.state.limiter.allow(f"key:{record.id}", 120, 2.0):
+            return JSONResponse(
+                status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
+            )
         return await call_next(request)
 
     # ---- 统一异常信封 ----

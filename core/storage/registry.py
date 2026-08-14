@@ -62,6 +62,18 @@ class ApiKey(SQLModel, table=True):
     last_used_at: datetime | None = None
 
 
+class AuditLog(SQLModel, table=True):
+    """审计日志（acl-enforcement.md §5 / 审计 F-05）：只追加不修改。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    actor: str = ""  # key_id 或 "master"
+    action: str = ""  # search | ingest | delete | key_manage
+    kb_id: str = ""
+    ip: str = ""
+    trace_id: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class IngestJob(SQLModel, table=True):
     """摄取任务（契约 §3：stage/attempt/error 持久化，进程崩溃可恢复）。"""
 
@@ -293,6 +305,29 @@ class Registry:
     def get_api_key(self, key_id: str) -> ApiKey | None:
         with Session(self._engine) as s:
             return s.get(ApiKey, key_id)
+
+    # ---------- 审计（F-05：只追加） ----------
+
+    def record_audit(
+        self,
+        actor: str,
+        action: str,
+        kb_id: str = "",
+        ip: str = "",
+        trace_id: str = "",
+    ) -> None:
+        entry = AuditLog(
+            actor=actor, action=action, kb_id=kb_id, ip=ip, trace_id=trace_id
+        )
+        with Session(self._engine) as s:
+            s.add(entry)
+            s.commit()
+
+    def list_audit(self, limit: int = 50) -> list[AuditLog]:
+        with Session(self._engine) as s:
+            return list(
+                s.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit))  # type: ignore[arg-type]
+            )
 
     # ---------- 摄取任务（状态机） ----------
 

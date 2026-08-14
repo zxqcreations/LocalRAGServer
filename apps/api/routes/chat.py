@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from apps.api.deps import (
@@ -76,6 +76,7 @@ def _stream_response(chat_client: ChatClient, model: str, messages: list[dict]):
 @router.post("/chat/completions", response_model=ChatResponse)
 def chat_completions(
     body: ChatRequest,
+    request: Request,
     registry: RegistryDep,
     search_service: SearchServiceDep,
     chat_client: ChatClientDep,
@@ -91,6 +92,12 @@ def chat_completions(
         if registry.get_kb(body.rag_kb_id) is None:
             raise_http(404, KB_NOT_FOUND, "知识库不存在")
         results = search_service.search(body.rag_kb_id, question, body.rag_top_k)
+        registry.record_audit(
+            actor=getattr(request.state, "actor", ""),
+            action="search",
+            kb_id=body.rag_kb_id,
+            ip=request.client.host if request.client else "",
+        )
         # 拒答判定（审计 F12/ARC-014）：字段按重排是否激活选择，阈值语义 best < threshold
         field = refusal_field(rerank_active=settings.rerank_backend != "off")
         if should_refuse(results, settings.refusal_threshold, field=field):

@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 
 from apps.api.deps import get_allowed_kbs, get_registry, get_search_service, get_settings
 from apps.api.errors import (
@@ -54,6 +54,7 @@ def _require_kb(registry: Registry, kb_id: str, allowed: AllowedKbs) -> None:
 def upload_document(
     kb_id: str,
     file: Annotated[UploadFile, File()],
+    request: Request,
     registry: RegistryDep,
     search_service: SearchServiceDep,
     settings: SettingsDep,
@@ -87,6 +88,12 @@ def upload_document(
         doc = search_service.ingest_file(
             kb_id, dest, title=filename, source=f"upload://{filename}"
         )
+        registry.record_audit(
+            actor=getattr(request.state, "actor", ""),
+            action="ingest",
+            kb_id=kb_id,
+            ip=request.client.host if request.client else "",
+        )
     except UnsupportedFormatError as exc:
         raise_http(415, UNSUPPORTED_FORMAT, str(exc))
     except TooManyPagesError as exc:
@@ -104,6 +111,7 @@ def upload_document(
 def ingest_url(
     kb_id: str,
     body: UrlIngestRequest,
+    request: Request,
     registry: RegistryDep,
     settings: SettingsDep,
     allowed: AllowedKbsDep,
@@ -132,6 +140,12 @@ def ingest_url(
     work.mkdir(parents=True, exist_ok=True)
     (work / "source.html").write_text(result.content, encoding="utf-8")
     enqueue_ingest(job.id)
+    registry.record_audit(
+        actor=getattr(request.state, "actor", ""),
+        action="ingest",
+        kb_id=kb_id,
+        ip=request.client.host if request.client else "",
+    )
     return ok(JobOut(id=job.id, doc_id=doc.id, stage=job.stage, attempt=job.attempt))
 
 
@@ -155,6 +169,7 @@ def get_document(kb_id: str, doc_id: str, registry: RegistryDep, allowed: Allowe
 def delete_document(
     kb_id: str,
     doc_id: str,
+    request: Request,
     registry: RegistryDep,
     search_service: SearchServiceDep,
     allowed: AllowedKbsDep,
@@ -163,4 +178,10 @@ def delete_document(
     if registry.get_document(kb_id, doc_id) is None:
         raise_http(404, DOC_NOT_FOUND, "文档不存在")
     search_service.delete_document(kb_id, doc_id)
+    registry.record_audit(
+        actor=getattr(request.state, "actor", ""),
+        action="delete",
+        kb_id=kb_id,
+        ip=request.client.host if request.client else "",
+    )
     return ok()
