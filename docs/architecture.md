@@ -1,6 +1,6 @@
 # LocalRAGServer 技术架构设计
 
-> 版本 v1.2 · 2026-08-14（v1.2 变更：Phase 1 实测数据回填——异步摄取管线/批量导入 2850 文档小时/MinerU 质量与大文档结论/ADR-002 worker 形态）
+> 版本 v1.3 · 2026-08-15（v1.3 变更：Phase 2/3 落地回填——混合检索 BM25+RRF 实测 MRR +8.1pp、ACL 强制层、MCP 双 transport、限流本地化 ADR-005、审计管线、探针）
 > 输入约束：NVIDIA GPU 8~16GB 单机（实机 RTX 2080 Ti 11GB，Turing SM75）· 十万级文档（≈千万级 chunk）· PDF/Office/代码/网页 · 中英混合 · 服务对象为 Agent（MCP + REST）+ 人工管理端（Web）
 
 ## 1. 目标与定位
@@ -8,7 +8,7 @@
 | 维度 | 目标 |
 |---|---|
 | 服务定位 | 本地部署的 **RAG 基础设施**，非应用：向上对 Agent / 应用暴露检索与生成能力，不绑定具体业务 |
-| 接入方式 | MCP 协议（Claude Code 等 Agent 直连）+ OpenAI 兼容 REST API + Web 管理端 |
+| 接入方式 | MCP 协议（**已实现**：stdio + streamable HTTP 双 transport，5 工具）+ OpenAI 兼容 REST + Web 管理端（Phase 4） |
 | 规模 | 十万级文档 / 千万级 chunk，单机承载，预留横向扩展路径 |
 | 核心能力 | 多格式解析（PDF/Office/代码/网页）、中英混合检索、混合检索+重排、RAG 生成、增量更新、评估闭环 |
 | 非目标 | 不追求多模态生成、不内置业务工作流、不替代 Dify 类应用平台 |

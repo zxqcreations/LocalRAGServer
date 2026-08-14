@@ -2,7 +2,7 @@
 
 本地大型 RAG 服务：供 Agent 调用的检索与生成基础设施。技术架构见 [docs/architecture.md](docs/architecture.md)。
 
-当前状态：**Phase 1 · 摄取管线**（异步状态机 + 批量导入 + URL 摄取 SSRF 防护 + MinerU 解析；PG 迁移演练待用户环境决策）。
+当前状态：**Phase 3 · 服务化**（MCP 双 transport + ACL 强制层 + API Key 管理 + 限流/审计 + 探针；安全审查进行中）。
 
 ## 快速开始
 
@@ -80,6 +80,28 @@ uv run python scripts/bench_ingest.py --dir <目录> --limit 100
 ```
 
 状态机契约见 docs/design/ingest-state-machine.md；worker 形态与代理决策见 ADR-002。
+
+## Phase 3 · MCP 与多租户
+
+```bash
+# 1. MCP stdio（Claude Code 配置，.mcp.json）
+{"local-rag": {"command": "uv", "args": ["run", "python", "scripts/mcp_stdio.py"]}}
+
+# 2. 签发受限 Key（仅 kb 白名单；明文仅显示一次）
+uv run python -c "
+from core.config import get_settings
+from core.storage.registry import Registry
+r = Registry(get_settings().database_url)
+record, raw = r.create_api_key('agent-key', ['<kb_id>'])
+print('API Key:', raw)
+"
+
+# 3. 探针
+curl http://127.0.0.1:8000/healthz   # 存活
+curl http://127.0.0.1:8000/readyz   # 依赖逐项连通性（database/qdrant 关键）
+```
+
+ACL 强制点与 Key 生命周期见 docs/design/acl-enforcement.md；限流本地化决策见 ADR-005。
 
 ## Windows 本机 GPU（Spike 实测，见 docs/spike/sm75-matrix.md）
 
