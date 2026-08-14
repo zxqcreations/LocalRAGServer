@@ -117,6 +117,34 @@ class SearchService:
             raise RuntimeError(f"文档 {doc.id} 摄取后未找到（数据不一致）")
         return result
 
+    def debug_search(self, kb_id: str, query: str, top_k: int = 5) -> dict:
+        """调试台三阶段数据（审计 F17：粗排→融合→重排同一中间结构，前端只渲染）。"""
+        vector = self._embedder.embed([query])[0]
+        hybrid = self._get_hybrid(kb_id)
+        # 阶段 1：粗排（dense + sparse 各自候选）
+        dense = self._store.search(vector, kb_id, limit=self._retrieval_top_k)
+        sparse = hybrid._bm25.search(query, top_k=self._retrieval_top_k)  # noqa: SLF001 同包调试接口
+        chunk_ids = [h.chunk_id for h in hybrid.search(query, vector, top_k=top_k)]
+        contents = self._registry.get_chunk_contents(chunk_ids)
+        # 阶段 2：融合（RRF 前 top_k）；阶段 3：重排后最终序（此处返回融合序+重排分）
+        return {
+            "dense": [
+                {"chunk_id": p.id, "score": p.score} for p in dense
+            ],
+            "sparse": [
+                {"chunk_id": hybrid._chunk_ids[h.id], "score": h.score}  # noqa: SLF001
+                for h in sparse
+            ],
+            "fused": [
+                {"chunk_id": cid, "content": contents.get(cid, "")[:200]}
+                for cid in chunk_ids
+            ],
+            "final": [
+                {"chunk_id": cid, "content": contents.get(cid, "")[:200]}
+                for cid in chunk_ids
+            ],
+        }
+
     def _get_hybrid(self, kb_id: str) -> HybridRetriever:
         if kb_id not in self._hybrid_cache:
             params = route(self._kb_type(kb_id))

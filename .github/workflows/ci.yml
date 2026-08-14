@@ -34,6 +34,20 @@ jobs:
       - name: 冒烟脚本（全链路回归基线）
         run: uv run python scripts/smoke.py
 
+  web-build:
+    name: Web 管理端构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 安装并构建
+        working-directory: apps/web
+        run: |
+          npm install
+          npm run build
+
   eval-regression:
     name: 检索回归（评测集 v1 基线）
     runs-on: ubuntu-latest

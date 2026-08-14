@@ -142,6 +142,45 @@ def test_admin_can_issue_and_revoke_key(tmp_path):
         assert resp.status_code == 401
 
 
+def test_annotation_idempotent_upsert(tmp_path):
+    # 审计 F17 契约：同 doc+query 重复标注覆盖而非追加
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)
+        # 建 KB（API 通道主 Key 权限；admin 通道只读列表）
+        client.post(
+            "/api/v1/kb",
+            json={"name": "标注库"},
+            headers={"Authorization": f"Bearer {API_KEY}"},
+        )
+        kb_id = client.get("/admin/api/kb").json()["data"][0]["id"]
+        payload = {
+            "kb_id": kb_id,
+            "query": "测试查询",
+            "doc_id": "d1",
+            "chunk_id": "c1",
+            "is_helpful": True,
+        }
+        first = client.post(
+            "/admin/api/annotations", json=payload, headers={"X-CSRF-Token": data["csrf_token"]}
+        )
+        assert first.status_code == 201
+        second = client.post(
+            "/admin/api/annotations",
+            json={**payload, "is_helpful": False},
+            headers={"X-CSRF-Token": data["csrf_token"]},
+        )
+        assert second.status_code == 201
+        assert first.json()["data"]["id"] == second.json()["data"]["id"]  # 幂等覆盖
+        listing = client.get(
+            f"/admin/api/annotations?kb_id={kb_id}"
+        ).json()["data"]
+        matches = [a for a in listing if a["query"] == "测试查询"]
+        assert len(matches) == 1
+        assert matches[0]["is_helpful"] is False  # 覆盖为最新判定
+
+
 def test_unauthenticated_admin_route_401(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:

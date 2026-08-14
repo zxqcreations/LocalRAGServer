@@ -12,9 +12,10 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from apps.api.deps import get_registry, get_settings
-from apps.api.errors import raise_http
+from apps.api.errors import KB_NOT_FOUND, raise_http
 from apps.api.schemas import Envelope, ok
 from core.config import Settings
+from core.security.acl import require_kb_access
 from core.security.admin import (
     hash_password,
     hash_session,
@@ -41,6 +42,14 @@ class LoginRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=8, max_length=256)
+
+
+class AnnotationRequest(BaseModel):
+    kb_id: str = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=2000)
+    doc_id: str = ""
+    chunk_id: str = ""
+    is_helpful: bool = True
 
 
 class KeyCreateRequest(BaseModel):
@@ -221,6 +230,55 @@ def revoke_key(key_id: str, request: Request, registry: RegistryDep):
             ip=_client_ip(request),
         )
     return ok({"revoked": True})
+
+
+@router.post("/annotations", response_model=Envelope[dict], status_code=201)
+def create_annotation(
+    body: AnnotationRequest, request: Request, registry: RegistryDep
+):
+    # 审计 F17 契约：幂等覆盖（同 doc+query 重复标注覆盖而非追加）+ kb_acl 校验
+    require_kb_access(body.kb_id, "*")  # 管理端全 KB 权限语义
+    if registry.get_kb(body.kb_id) is None:
+        raise_http(404, KB_NOT_FOUND, "知识库不存在")
+    user = request.state.admin_user
+    entry = registry.upsert_annotation(
+        kb_id=body.kb_id,
+        query=body.query,
+        doc_id=body.doc_id,
+        chunk_id=body.chunk_id,
+        is_helpful=body.is_helpful,
+        created_by=user.username,
+    )
+    return ok({"id": entry.id, "kb_id": entry.kb_id, "query": entry.query})
+
+
+@router.get("/annotations", response_model=Envelope[list[dict]])
+def list_annotations(registry: RegistryDep, kb_id: str, limit: int = 200):
+    if registry.get_kb(kb_id) is None:
+        raise_http(404, KB_NOT_FOUND, "知识库不存在")
+    return ok(
+        [
+            {
+                "id": a.id,
+                "kb_id": a.kb_id,
+                "query": a.query,
+                "doc_id": a.doc_id,
+                "chunk_id": a.chunk_id,
+                "is_helpful": a.is_helpful,
+                "created_by": a.created_by,
+            }
+            for a in registry.list_annotations(kb_id, limit)
+        ]
+    )
+
+
+@router.post("/search-debug", response_model=Envelope[dict])
+def search_debug(body: AnnotationRequest, request: Request, registry: RegistryDep):
+    # 调试台三阶段数据（审计 F17：与 search 服务同一中间结构，前端只渲染）
+    if registry.get_kb(body.kb_id) is None:
+        raise_http(404, KB_NOT_FOUND, "知识库不存在")
+    result = request.app.state.search_service.debug_search(body.kb_id, body.query)
+    return ok(result)
 
 
 def _client_ip(request: Request) -> str:

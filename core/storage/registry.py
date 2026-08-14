@@ -83,6 +83,19 @@ class AdminSession(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class Annotation(SQLModel, table=True):
+    """人工标注（审计 F17：调试台标注沉淀为评测集；幂等键 (kb_id, query)）。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    kb_id: str = Field(index=True)
+    query: str
+    doc_id: str = ""
+    chunk_id: str = ""
+    is_helpful: bool = True
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class AuditLog(SQLModel, table=True):
     """审计日志（acl-enforcement.md §5 / 审计 F-05）：只追加不修改。"""
 
@@ -337,6 +350,56 @@ class Registry:
     def get_api_key(self, key_id: str) -> ApiKey | None:
         with Session(self._engine) as s:
             return s.get(ApiKey, key_id)
+
+    # ---------- 标注（审计 F17：幂等覆盖，不追加） ----------
+
+    def upsert_annotation(
+        self,
+        kb_id: str,
+        query: str,
+        doc_id: str,
+        chunk_id: str,
+        is_helpful: bool,
+        created_by: str,
+    ) -> Annotation:
+        with Session(self._engine) as s:
+            existing = s.exec(
+                select(Annotation).where(
+                    Annotation.kb_id == kb_id, Annotation.query == query
+                )
+            ).first()
+            if existing is not None:
+                existing.doc_id = doc_id
+                existing.chunk_id = chunk_id
+                existing.is_helpful = is_helpful
+                existing.created_by = created_by
+                s.add(existing)
+                s.commit()
+                s.refresh(existing)
+                return existing
+            entry = Annotation(
+                kb_id=kb_id,
+                query=query,
+                doc_id=doc_id,
+                chunk_id=chunk_id,
+                is_helpful=is_helpful,
+                created_by=created_by,
+            )
+            s.add(entry)
+            s.commit()
+            s.refresh(entry)
+            return entry
+
+    def list_annotations(self, kb_id: str, limit: int = 200) -> list[Annotation]:
+        with Session(self._engine) as s:
+            return list(
+                s.exec(
+                    select(Annotation)
+                    .where(Annotation.kb_id == kb_id)
+                    .order_by(Annotation.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(limit)
+                )
+            )
 
     # ---------- 审计（F-05：只追加） ----------
 
