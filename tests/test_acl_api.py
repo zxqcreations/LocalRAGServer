@@ -30,11 +30,11 @@ def env(tmp_path, fake_llm_server):
         kb2 = master.post("/api/v1/kb", json={"name": "库二"}).json()["data"]["id"]
         master.post(
             f"/api/v1/kb/{kb1}/documents",
-            files={"file": ("a.md", "库一的秘密内容。".encode("utf-8"), "text/markdown")},
+            files={"file": ("a.md", "库一的秘密内容。".encode(), "text/markdown")},
         )
         master.post(
             f"/api/v1/kb/{kb2}/documents",
-            files={"file": ("b.md", "库二的秘密内容。".encode("utf-8"), "text/markdown")},
+            files={"file": ("b.md", "库二的秘密内容。".encode(), "text/markdown")},
         )
     record, raw = app.state.registry.create_api_key("受限Key", [kb1])
     yield app, kb1, kb2, raw

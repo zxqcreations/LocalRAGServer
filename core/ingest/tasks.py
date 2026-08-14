@@ -117,6 +117,9 @@ def index_task(self, job_id: str):
 
 def enqueue_ingest(job_id: str):
     """契约 §4：链式编排 parse → chunk → embed → index。"""
+    # 按当前 Settings 刷新代理目录（模块导入时只初始化了当时的 data_dir；
+    # 测试/多进程环境各自 data_dir 不同——此处幂等重建，确保队列目录存在）
+    app.conf.broker_transport_options = _broker_transport_options()
     # celery 装饰后任务对象才有 .si（pyright 无法识别装饰器变换）；
     # 不可变签名：前序任务返回值不串入后续任务参数
     return chain(

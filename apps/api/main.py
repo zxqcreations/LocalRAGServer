@@ -16,12 +16,12 @@ from apps.api.errors import (
 )
 from apps.api.routes import chat, documents, kb, search
 from apps.api.schemas import err
-from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
+from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
 from core.storage.registry import Registry
 from core.storage.vector import QdrantVectorStore
 
