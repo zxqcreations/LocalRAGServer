@@ -25,8 +25,13 @@ def build_mcp_server(
     search_service: SearchService,
     settings: Settings,
     allowed_resolver: AllowedResolver | None = None,
+    allow_local_paths: bool = True,
 ) -> Server:
-    """构建 MCP Server；allowed_resolver 注入请求级 ACL（默认全权限，stdio 语义）。"""
+    """构建 MCP Server；allowed_resolver 注入请求级 ACL（默认全权限，stdio 语义）。
+
+    allow_local_paths：本地文件摄取开关（审计 H-2）——stdio 本机通道为 True；
+    streamable HTTP 挂载时必须传 False（远程通道拒绝本地路径，防任意文件读取）。
+    """
     server = Server("local-rag-server")
 
     def _allowed() -> AllowedKbs:
@@ -174,6 +179,16 @@ def build_mcp_server(
                 )
 
             if name == "ingest_document":
+                if not allow_local_paths:
+                    return types.CallToolResult(
+                        content=[
+                            types.TextContent(
+                                type="text",
+                                text="本通道不支持本地文件摄取（审计 H-2：仅 stdio 本机通道可用）",
+                            )
+                        ],
+                        is_error=True,
+                    )
                 kb = _resolve_kb(arguments["kb"])
                 src = Path(arguments["path"])
                 if not src.is_file():
@@ -188,7 +203,8 @@ def build_mcp_server(
                             )
                         ]
                     )
-                doc = registry.create_document(kb.id, src.name, str(src), content_hash)
+                # 审计 M-3：source 不落绝对路径（仅存 basename 形态）
+                doc = registry.create_document(kb.id, src.name, f"local://{src.name}", content_hash)
                 job = registry.create_job(doc.id, kb.id)
                 work = settings.data_dir / "ingest_work" / job.id
                 work.mkdir(parents=True, exist_ok=True)

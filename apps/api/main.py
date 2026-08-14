@@ -169,6 +169,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=401, content=err(AUTH_REQUIRED, "缺少 Bearer API Key")
             )
         raw_key = header[len("Bearer ") :]
+        # 认证前 per-IP 限流（审计 M-2：防 scrypt 计算放大 DoS 与失败尝试爆破）
+        ip = request.client.host if request.client else "unknown"
+        if not app.state.limiter.allow(f"ip:{ip}", 30, 0.5):
+            return JSONResponse(
+                status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
+            )
         # 1) 引导主 Key（settings.api_key）：全权限，Phase 4 Web 端接管签发
         if compare_digest(raw_key, settings.api_key):
             request.state.allowed_kbs = "*"

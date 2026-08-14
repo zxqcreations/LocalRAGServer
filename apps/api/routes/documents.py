@@ -61,7 +61,9 @@ def upload_document(
     allowed: AllowedKbsDep,
 ):
     _require_kb(registry, kb_id, allowed)
-    filename = Path(file.filename or "").name  # 仅取 basename，防路径穿越
+    # 审计 L-3：跨平台文件名净化（反斜杠/斜杠统一替换，防 Windows 风格穿越残留）
+    raw_name = file.filename or ""
+    filename = raw_name.replace("\\", "/").rsplit("/", 1)[-1]
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise_http(415, UNSUPPORTED_FORMAT, f"不支持的文件格式：{suffix or '(无扩展名)'}")
@@ -81,8 +83,9 @@ def upload_document(
                         413, PAYLOAD_TOO_LARGE, f"文件超过大小限制（{settings.max_upload_mb}MB）"
                     )
                 tmp.write(chunk)
-        # 魔数校验：不信任客户端声明的扩展名（审计 F-07）
-        head = dest.read_bytes()[: _SIGNATURE_BYTES]
+        # 魔数校验：不信任客户端声明的扩展名（审计 F-07；L-2：只读头部 8 字节，不整读文件）
+        with dest.open("rb") as f:
+            head = f.read(_SIGNATURE_BYTES)
         if not check_signature(suffix, head):
             raise_http(415, INVALID_FILE_CONTENT, f"文件内容与扩展名 {suffix} 不符")
         doc = search_service.ingest_file(

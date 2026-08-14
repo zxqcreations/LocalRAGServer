@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from apps.api.deps import get_allowed_kbs, get_registry
 from apps.api.errors import KB_NOT_FOUND, raise_http
 from apps.api.schemas import Envelope, KbCreate, KbOut, ok
-from core.security.acl import AllowedKbs, require_kb_access
+from core.security.acl import AclDeniedError, AllowedKbs, require_kb_access
 from core.storage.registry import Registry
 
 router = APIRouter()
@@ -16,9 +16,10 @@ AllowedKbsDep = Annotated[AllowedKbs, Depends(get_allowed_kbs)]
 
 
 @router.post("/kb", response_model=Envelope[KbOut], status_code=201)
-def create_kb(body: KbCreate, registry: RegistryDep):
-    # 创建 KB 属管理操作：仅主 Key 授权路径（allowed == '*'）
-    # 表 Key 创建 KB 的能力在 Phase 4 Web 管理端闭环（此处保持主 Key 专属）
+def create_kb(body: KbCreate, registry: RegistryDep, allowed: AllowedKbsDep):
+    # 管理操作：仅主 Key（allowed == "*"）授权（审计 H-1：表 Key 越权创建 → 403）
+    if allowed != "*":
+        raise AclDeniedError("创建知识库仅限主 Key")
     kb = registry.create_kb(body.name, body.kb_type)
     return ok(KbOut.model_validate(kb))
 

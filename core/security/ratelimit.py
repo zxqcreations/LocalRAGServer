@@ -3,6 +3,7 @@
 fail-open 语义：限流是保护而非阻断，内部异常时放行并记录（ADR-005 约束）。
 """
 import logging
+import threading
 from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger("local_rag_server")
@@ -21,21 +22,23 @@ class InMemoryTokenBucket:
 
         self._clock = clock or _time.monotonic
         self._buckets: dict[tuple[str, int, float], tuple[float, float]] = {}
+        self._lock = threading.Lock()  # 审计 L-1：read-modify-write 加锁（多 worker/线程安全）
 
     def allow(self, key: str, capacity: int, refill_per_s: float) -> bool:
         now = self._clock()
         bucket_key = (key, capacity, refill_per_s)
-        state = self._buckets.get(bucket_key)
-        if state is None:
-            tokens, last = float(capacity), now
-        else:
-            tokens, last = state
-            tokens = min(float(capacity), tokens + (now - last) * refill_per_s)
-        if tokens >= 1.0:
-            self._buckets[bucket_key] = (tokens - 1.0, now)
-            return True
-        self._buckets[bucket_key] = (tokens, now)
-        return False
+        with self._lock:
+            state = self._buckets.get(bucket_key)
+            if state is None:
+                tokens, last = float(capacity), now
+            else:
+                tokens, last = state
+                tokens = min(float(capacity), tokens + (now - last) * refill_per_s)
+            if tokens >= 1.0:
+                self._buckets[bucket_key] = (tokens - 1.0, now)
+                return True
+            self._buckets[bucket_key] = (tokens, now)
+            return False
 
 
 class FailOpenLimiter:

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 T = TypeVar("T")
 
@@ -57,11 +57,18 @@ class DocumentOut(BaseModel):
     id: str
     kb_id: str
     title: str
-    source: str
+    source: str  # 已脱敏形态（upload:// 或 local:// basename；审计 M-3）
     status: str
     chunk_count: int
-    error: str | None
+    error: str | None  # 分类化错误码（完整异常仅服务端日志；审计 M-3）
     created_at: datetime
+
+    @field_serializer("error")
+    def _sanitize_error(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        # 只保留首行（错误分类），丢弃堆栈/路径细节
+        return value.splitlines()[0][:200]
 
 
 class UrlIngestRequest(BaseModel):

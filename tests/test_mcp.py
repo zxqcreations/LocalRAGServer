@@ -130,3 +130,42 @@ async def test_unknown_kb_returns_error_result(env):
         result = await client.call_tool("search_knowledge", {"query": "x", "kb": "不存在"})
         assert result.is_error
         assert "知识库不存在" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_ingest_rejected_when_local_paths_disabled(env, tmp_path):
+    # 审计 H-2：远程通道（allow_local_paths=False）拒绝本地文件摄取
+    src = tmp_path / "x.md"
+    src.write_text("内容。", encoding="utf-8")
+
+    registry, search_service, settings, _ = env
+    server = build_mcp_server(
+        registry, search_service, settings, allow_local_paths=False
+    )
+    import asyncio
+    import contextlib
+
+    from mcp import ClientSession
+    from mcp.shared.memory import create_client_server_memory_streams
+
+    @contextlib.asynccontextmanager
+    async def cm():
+        async with create_client_server_memory_streams() as (cs, ss):
+            task = asyncio.create_task(
+                server.run(*ss, server.create_initialization_options())
+            )
+            try:
+                async with ClientSession(*cs) as client:
+                    await client.initialize()
+                    yield client
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async with cm() as client:
+        result = await client.call_tool(
+            "ingest_document", {"path": str(src), "kb": "技术库"}
+        )
+        assert result.is_error
+        assert "不支持本地文件摄取" in result.content[0].text

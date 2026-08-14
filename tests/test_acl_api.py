@@ -118,3 +118,23 @@ def test_master_key_has_full_access(env):
             headers=_auth(API_KEY),
         )
         assert resp.status_code == 200
+
+
+def test_restricted_key_cannot_create_kb(env):
+    # 审计 H-1：KB 创建为管理操作，仅主 Key（allowed == "*"）
+    app, kb1, kb2, raw = env
+    with TestClient(app) as c:
+        resp = c.post(
+            "/api/v1/kb", json={"name": "越权创建"}, headers=_auth(raw)
+        )
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "acl_denied"
+
+
+def test_master_key_can_create_kb(env):
+    app, kb1, kb2, raw = env
+    with TestClient(app) as c:
+        resp = c.post(
+            "/api/v1/kb", json={"name": "主键创建"}, headers=_auth(API_KEY)
+        )
+        assert resp.status_code == 201

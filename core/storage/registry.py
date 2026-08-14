@@ -263,12 +263,19 @@ class Registry:
         import secrets as _secrets
 
         raw = _secrets.token_urlsafe(32)
+        # 审计 M-5：强制 UTC-aware 规范化（naive 输入按 UTC 解释，拒绝歧义）
+        normalized_expiry = expires_at
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                normalized_expiry = expires_at.replace(tzinfo=UTC)
+            else:
+                normalized_expiry = expires_at.astimezone(UTC)
         record = ApiKey(
             name=name,
             key_prefix=key_prefix(raw),
             key_hash=hash_api_key(raw),
             kb_acl=json.dumps(kb_acl or ["*"], ensure_ascii=False),
-            expires_at=expires_at,
+            expires_at=normalized_expiry,
         )
         with Session(self._engine) as s:
             s.add(record)
