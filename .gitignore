@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# 数据与本地配置
+data/
+.env
+
+# 覆盖率与扫描产物
+.coverage
+coverage.xml
+htmlcov/
+
+# 模型文件（本地缓存，通过 MANIFEST 管理）
+models/
+
+# 日志
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# 机器特定配置
+.claude/settings.local.json

@@ -1,0 +1,633 @@
+<title>LocalRAG 架构蓝图</title>
+<style>
+@font-face{font-family:"JMono";src:url("__FONT_MONO_400__") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"JMono";src:url("__FONT_MONO_700__") format("woff2");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"PSans";src:url("__FONT_SANS_400__") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"PSans";src:url("__FONT_SANS_600__") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+
+:root{
+  --paper:#F3F6FA;
+  --panel:#FFFFFF;
+  --ink:#16283C;
+  --ink-soft:#4A5C70;
+  --line:#C9D5E2;
+  --line-strong:#93A7BC;
+  --copper:#B65A1F;
+  --copper-ink:#8A4213;
+  --steel:#2E6E9E;
+  --ok:#2E7A45;
+  --warn:#9C6A14;
+  --crit:#B23A2D;
+  --chip-ok:#E5F2E9;
+  --chip-warn:#F7EDD8;
+  --chip-crit:#F8E4E1;
+  --grid:rgba(46,110,158,.045);
+  --code-bg:#EDF2F7;
+  --shadow:0 1px 0 rgba(22,40,60,.05);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0C1624;
+    --panel:#12223A;
+    --ink:#DCE6F1;
+    --ink-soft:#9DB2C8;
+    --line:#26405C;
+    --line-strong:#3A5876;
+    --copper:#E08A4C;
+    --copper-ink:#F0B48A;
+    --steel:#7FB6DA;
+    --ok:#6FBF8D;
+    --warn:#E0B45C;
+    --crit:#E58A7D;
+    --chip-ok:#142E1E;
+    --chip-warn:#2E2612;
+    --chip-crit:#331815;
+    --grid:rgba(127,182,218,.035);
+    --code-bg:#0F1D30;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0C1624;
+  --panel:#12223A;
+  --ink:#DCE6F1;
+  --ink-soft:#9DB2C8;
+  --line:#26405C;
+  --line-strong:#3A5876;
+  --copper:#E08A4C;
+  --copper-ink:#F0B48A;
+  --steel:#7FB6DA;
+  --ok:#6FBF8D;
+  --warn:#E0B45C;
+  --crit:#E58A7D;
+  --chip-ok:#142E1E;
+  --chip-warn:#2E2612;
+  --chip-crit:#331815;
+  --grid:rgba(127,182,218,.035);
+  --code-bg:#0F1D30;
+  --shadow:none;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{animation:none!important;transition:none!important}
+}
+
+body{
+  margin:0;
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/32px 32px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/32px 32px,
+    var(--paper);
+  color:var(--ink);
+  font-family:"PSans","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:15.5px;
+  line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1000px;margin:0 auto;padding:56px 28px 72px}
+
+/* ---------- 标题栏（工程图纸 title block） ---------- */
+.titleblock{
+  border:1px solid var(--line-strong);
+  border-top:4px solid var(--copper);
+  background:var(--panel);
+  padding:30px 34px 26px;
+  box-shadow:var(--shadow);
+}
+.tb-row{
+  display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px;
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:12px;letter-spacing:.12em;color:var(--ink-soft);
+}
+.tb-row b{color:var(--copper);font-weight:700}
+h1{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:clamp(30px,4.6vw,44px);
+  font-weight:700;letter-spacing:.01em;line-height:1.15;
+  margin:20px 0 12px;text-wrap:balance;
+}
+h1 .mark{color:var(--copper)}
+.lede{
+  margin:0;max-width:62ch;color:var(--ink-soft);font-size:16px;
+}
+.chips{list-style:none;display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 0;padding:0}
+.chips li{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:12px;letter-spacing:.06em;
+  border:1px solid var(--line);background:var(--paper);
+  color:var(--ink-soft);padding:3px 10px;border-radius:2px;
+}
+
+/* ---------- 目录 ---------- */
+.toc{
+  display:flex;flex-wrap:wrap;gap:4px 18px;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  margin:34px 0 8px;padding:12px 2px;
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:12.5px;letter-spacing:.04em;
+}
+.toc a{color:var(--ink-soft);text-decoration:none;white-space:nowrap}
+.toc a:hover{color:var(--copper)}
+.toc a:focus-visible{outline:2px solid var(--steel);outline-offset:3px}
+
+/* ---------- 章节 ---------- */
+section{padding:44px 0 8px;border-top:1px solid var(--line);margin-top:36px;scroll-margin-top:20px}
+section:first-of-type{border-top:none;margin-top:0}
+.eyebrow{
+  display:flex;align-items:center;gap:8px;
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--copper);
+  text-transform:uppercase;
+}
+.eyebrow::before{content:"";width:7px;height:7px;background:var(--copper)}
+h2{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:clamp(20px,2.6vw,25px);font-weight:700;
+  margin:10px 0 6px;line-height:1.3;text-wrap:balance;
+}
+h3{font-size:16.5px;font-weight:600;margin:30px 0 8px}
+p{max-width:72ch}
+section p.note{color:var(--ink-soft)}
+strong{font-weight:600}
+
+/* ---------- 图示面板 ---------- */
+.fig{
+  border:1px solid var(--line);background:var(--panel);
+  margin:22px 0;box-shadow:var(--shadow);
+}
+.fig-cap{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11.5px;letter-spacing:.1em;color:var(--ink-soft);
+  border-bottom:1px solid var(--line);padding:8px 14px;
+}
+.fig-cap b{color:var(--steel);font-weight:700}
+.fig .mermaid{padding:20px 16px;display:flex;justify-content:center;overflow-x:auto}
+
+/* ---------- 表格（规格表风格） ---------- */
+.tbl{overflow-x:auto;border:1px solid var(--line);background:var(--panel);margin:18px 0;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:520px}
+th{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--ink-soft);
+  text-align:left;padding:9px 14px;border-bottom:2px solid var(--line-strong);
+  background:var(--paper);white-space:nowrap;
+}
+td{padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--paper) 55%,transparent)}
+td.num,td code{font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:13px}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+td b{font-weight:600}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .crit{color:var(--crit)}
+
+/* ---------- 徽章 ---------- */
+.badge{
+  display:inline-block;font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11px;font-weight:700;letter-spacing:.05em;line-height:1;
+  padding:4px 8px;border-radius:2px;white-space:nowrap;
+}
+.b-ok{color:var(--ok);background:var(--chip-ok);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent)}
+.b-warn{color:var(--warn);background:var(--chip-warn);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent)}
+.b-crit{color:var(--crit);background:var(--chip-crit);border:1px solid color-mix(in srgb,var(--crit) 40%,transparent)}
+
+/* ---------- 显存 Profile 卡 ---------- */
+.prof-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:18px 0}
+.prof{
+  border:1px solid var(--line);background:var(--panel);padding:16px 18px 14px;
+  position:relative;box-shadow:var(--shadow);
+}
+.prof.hot{border-color:var(--line-strong);border-top:3px solid var(--copper)}
+.prof-letter{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:26px;font-weight:700;color:var(--copper);line-height:1;
+}
+.prof-name{font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12px;letter-spacing:.08em;color:var(--ink-soft);margin-top:6px}
+.prof-combo{font-size:13px;color:var(--ink-soft);margin:10px 0 0;line-height:1.6}
+.prof-vram{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:20px;font-weight:700;margin-top:12px;font-variant-numeric:tabular-nums;
+}
+.prof-tag{position:absolute;top:12px;right:12px}
+
+/* ---------- 路线图（真实序列，编号有信息量） ---------- */
+.phases{display:grid;gap:0;margin:18px 0;border:1px solid var(--line);background:var(--panel);box-shadow:var(--shadow)}
+.phase{
+  display:grid;grid-template-columns:64px 1fr;gap:0 18px;
+  padding:16px 18px;border-bottom:1px solid var(--line);align-items:start;
+}
+.phase:last-child{border-bottom:none}
+.phase-num{
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:22px;font-weight:700;color:var(--copper);font-variant-numeric:tabular-nums;
+}
+.phase-name{font-weight:600;font-size:15.5px}
+.phase-name small{font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:11.5px;color:var(--ink-soft);letter-spacing:.06em;margin-left:8px}
+.phase-deliv{margin:6px 0 0;color:var(--ink-soft);font-size:14px}
+
+/* ---------- 代码块 ---------- */
+pre.code{
+  background:var(--code-bg);border:1px solid var(--line);
+  padding:16px 18px;overflow-x:auto;font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:13px;line-height:1.7;margin:18px 0;
+}
+pre.code .c{color:var(--ink-soft)}
+
+/* ---------- 页脚 ---------- */
+footer{
+  border-top:1px solid var(--line-strong);margin-top:56px;padding-top:18px;
+  display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px;
+  font-family:"JMono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11.5px;letter-spacing:.08em;color:var(--ink-soft);
+}
+footer b{color:var(--steel);font-weight:700}
+
+@media (prefers-reduced-motion:no-preference){
+  .titleblock{animation:rise .5s cubic-bezier(.2,.7,.3,1) both}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+}
+</style>
+
+<div class="wrap">
+
+<header class="titleblock">
+  <div class="tb-row">
+    <span><b>LOCALRAGSERVER</b> · 技术架构设计</span>
+    <span>v1.1 · 2026-08-14</span>
+  </div>
+  <h1>LocalRAG <span class="mark">架构蓝图</span></h1>
+  <p class="lede">面向 Agent 的本地大型 RAG 基础设施：单机 GPU 承载十万级文档与千万级 chunk，MCP / REST / Web 三通道接入，混合检索 + 重排 + 评估闭环。同步文档：<code>docs/architecture.md</code>。</p>
+  <ul class="chips">
+    <li>GPU 8–16GB 单机</li>
+    <li>十万级文档 / 千万级 chunk</li>
+    <li>PDF · Office · 代码 · 网页</li>
+    <li>中英混合检索</li>
+    <li>MCP + REST + Web</li>
+  </ul>
+</header>
+
+<nav class="toc" aria-label="目录">
+  <a href="#arch">总体架构</a>
+  <a href="#stack">技术选型</a>
+  <a href="#vram">显存预算</a>
+  <a href="#ingest">摄取管线</a>
+  <a href="#retrieval">检索与生成</a>
+  <a href="#storage">存储与容量</a>
+  <a href="#api">接口设计</a>
+  <a href="#deploy">部署与安全</a>
+  <a href="#adr">关键决策</a>
+  <a href="#risks">风险</a>
+  <a href="#roadmap">实施路线</a>
+</nav>
+
+<section id="arch">
+  <div class="eyebrow">Architecture</div>
+  <h2>总体架构</h2>
+  <p>三通道接入共享同一服务内核；摄取管线异步隔离，避免大文件解析拖垮在线查询；数据层四库各司其职。</p>
+  <div class="fig">
+    <div class="fig-cap"><b>图 A</b> · 总体架构</div>
+    <pre class="mermaid">
+flowchart TB
+    subgraph Clients["接入方"]
+        A1["Agent<br/>Claude Code / MCP 客户端"]
+        A2["应用<br/>REST 客户端"]
+        A3["管理员<br/>Web 管理端"]
+    end
+    subgraph Gateway["接入层"]
+        B1["MCP Server<br/>search / ask / ingest"]
+        B2["FastAPI REST<br/>OpenAI 兼容 + 原生 API"]
+        B3["Web UI<br/>Vue3 管理端"]
+        B4["认证与限流<br/>API Key / Redis 令牌桶"]
+    end
+    subgraph Core["服务层（无状态，可横向扩展）"]
+        C1["RAG Orchestrator<br/>路由 / 改写 / 上下文组装"]
+        C2["Hybrid Retrieval<br/>dense + sparse + RRF"]
+        C3["Reranker<br/>bge-reranker-v2-m3"]
+        C4["Generator<br/>vLLM Qwen3"]
+        C5["KB Manager<br/>知识库 / 文档生命周期 / ACL"]
+    end
+    subgraph Data["数据层"]
+        D1[("Qdrant<br/>dense+sparse 向量")]
+        D2[("PostgreSQL<br/>元数据 / chunk 文本")]
+        D3[("MinIO<br/>原始文件")]
+        D4[("Redis<br/>队列 / 缓存 / 限流")]
+    end
+    subgraph Ingest["摄取管线（Celery 异步）"]
+        E1["解析 Worker<br/>MinerU / PaddleOCR / tree-sitter"]
+        E2["分块器<br/>文档 / 代码 / 网页策略"]
+        E3["嵌入 Worker<br/>TEI bge-m3"]
+        E4["网页爬虫<br/>增量采集"]
+    end
+    subgraph Ops["可观测与评估"]
+        F1["Prometheus + Grafana"]
+        F2["RAGAS 评测闭环"]
+    end
+    A1 --> B1
+    A2 --> B2
+    A3 --> B3
+    B1 & B2 & B3 --> B4 --> C1
+    C1 --> C2 --> C3 --> C4
+    C1 <--> C5
+    C2 <--> D1
+    C2 <--> D4
+    C5 <--> D2
+    E4 --> E1 --> E2 --> E3 --> D1
+    E3 --> D2
+    E1 <--> D3
+    E1 & E2 & E3 <--> D4
+    F1 -.-> C2 & C4 & E3
+    F2 -.-> C4
+    </pre>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>层</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><b>接入层</b></td><td>MCP / REST / Web 三通道共享同一服务内核，统一认证、限流、审计</td></tr>
+      <tr><td><b>服务层</b></td><td>无状态可横向扩展；检索与生成解耦——Agent 可只检索（<code>/search</code>）或走完整 RAG（<code>/chat</code>）</td></tr>
+      <tr><td><b>摄取管线</b></td><td>异步（Celery），与在线服务隔离，支持重试、断点续传、增量更新</td></tr>
+      <tr><td><b>数据层</b></td><td>向量（Qdrant）、结构化（Postgres）、文件（MinIO）、状态/缓存（Redis）各司其职</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="stack">
+  <div class="eyebrow">Stack</div>
+  <h2>技术选型</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>环节</th><th>选型</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>服务框架</td><td><b>Python 3.12 + FastAPI + Pydantic v2</b></td><td>RAG 生态最全；异步高并发；类型安全</td></tr>
+      <tr><td>任务队列</td><td><b>Celery + Redis</b></td><td>解析/嵌入异步化，重试、断点、flower 监控</td></tr>
+      <tr><td>向量库</td><td><b>Qdrant（单机）</b></td><td>named vectors（dense+sparse 共存）、原生 RRF、payload 过滤</td></tr>
+      <tr><td>嵌入模型</td><td><b>bge-m3</b>（TEI 托管）</td><td>一模型三用（dense/sparse/多向量），100+ 语言，8192 上下文</td></tr>
+      <tr><td>重排模型</td><td><b>bge-reranker-v2-m3</b>（TEI 托管）</td><td>多语言 cross-encoder，与嵌入同源同栈</td></tr>
+      <tr><td>生成模型</td><td><b>Qwen3-8B-AWQ</b>（vLLM）→ 升级路径 14B</td><td>中文能力强、指令跟随好；AWQ 4bit 显存友好</td></tr>
+      <tr><td>解析主线</td><td><b>MinerU</b> + <b>PaddleOCR</b>；unstructured/docling 兜底</td><td>中文版面/公式/表格解析事实标准</td></tr>
+      <tr><td>代码分块</td><td><b>tree-sitter</b></td><td>函数/类级 AST 分块，保留符号与 docstring</td></tr>
+      <tr><td>网页采集</td><td>httpx + Playwright + Readability</td><td>正文提取、sitemap、增量更新</td></tr>
+      <tr><td>MCP</td><td>官方 <code>mcp</code> Python SDK</td><td>stdio（本地）+ streamable HTTP（远程）双 transport</td></tr>
+      <tr><td>Web 前端</td><td>Vue 3 + TypeScript + Pinia + Element Plus</td><td>内部管理端，开发效率优先</td></tr>
+      <tr><td>可观测 / 评估</td><td>Prometheus + Grafana + structlog / RAGAS</td><td>指标、链路、结构化日志、忠实度回归</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">定位说明：作为「供 Agent 调用的服务」，选择自建服务层而非 Dify / RAGFlow 类应用平台——需要 API 级可控性与协议兼容性，见 <a href="#adr" style="color:var(--steel)">关键决策</a>。</p>
+</section>
+
+<section id="vram">
+  <div class="eyebrow">VRAM Budget</div>
+  <h2>GPU 显存预算（关键决策）</h2>
+  <p>8~16GB 单卡上，嵌入、重排、生成三个模型必须精细排布。原则：<strong>嵌入必须 GPU 常驻</strong>（千万级 chunk 摄取是吞吐关键），reranker 是唯一可降级项（CPU 重排只影响延迟，不影响正确性）。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>模型</th><th>用途</th><th class="num">权重</th><th class="num">运行时 VRAM</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>bge-m3（TEI）</td><td>嵌入 dense+sparse</td><td class="num">1.1GB</td><td class="num">≈2.5GB</td><td>摄取与查询共用</td></tr>
+      <tr><td>bge-reranker-v2-m3（TEI）</td><td>重排</td><td class="num">1.1GB</td><td class="num">≈2.0GB</td><td>可降级 CPU</td></tr>
+      <tr><td>Qwen3-8B-AWQ（vLLM）</td><td>生成</td><td class="num">5.2GB</td><td class="num">≈6.0GB</td><td>含 KV cache</td></tr>
+      <tr><td>Qwen3-14B-AWQ（vLLM）</td><td>生成（升级）</td><td class="num">9.3GB</td><td class="num">≈11.5GB</td><td>16GB 卡紧张，需调 KV</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prof-grid">
+    <div class="prof hot">
+      <span class="prof-tag badge b-ok">实机默认</span>
+      <div class="prof-letter">D</div>
+      <div class="prof-name">PROFILE D · 11GB（Turing）</div>
+      <p class="prof-combo">生成 llama.cpp GGUF Q4_K_M 部分 offload（或 vLLM 钉版 + enforce-eager + 8K 上限）+ bge-m3 GPU + reranker CPU</p>
+      <div class="prof-vram">≈ 9.5GB <span class="ok">✓</span></div>
+    </div>
+    <div class="prof">
+      <div class="prof-letter">A</div>
+      <div class="prof-name">PROFILE A · ≥12GB</div>
+      <p class="prof-combo">Qwen3-8B-AWQ + bge-m3 + reranker 全 GPU 常驻</p>
+      <div class="prof-vram">≈ 10.5GB <span class="ok">✓</span></div>
+    </div>
+    <div class="prof">
+      <div class="prof-letter">B</div>
+      <div class="prof-name">PROFILE B · 16GB</div>
+      <p class="prof-combo">Qwen3-14B-AWQ + bge-m3 GPU；reranker 移 CPU</p>
+      <div class="prof-vram">≈ 14GB <span class="warn">紧</span></div>
+    </div>
+    <div class="prof">
+      <div class="prof-letter">C</div>
+      <div class="prof-name">PROFILE C · 8GB</div>
+      <p class="prof-combo">bge-m3 GPU；生成移 CPU 或部分 offload（生成与嵌入不可同驻 GPU）</p>
+      <div class="prof-vram">≈ 5GB + 生成 CPU <span class="warn">紧凑</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="ingest">
+  <div class="eyebrow">Ingestion</div>
+  <h2>摄取管线</h2>
+  <div class="fig">
+    <div class="fig-cap"><b>图 B</b> · 摄取流程</div>
+    <pre class="mermaid">
+flowchart LR
+    U1["文件上传 / 网页 URL"] --> D1["内容哈希去重<br/>SHA-256"]
+    D1 --> P1["解析路由<br/>PDF 文本层 → MinerU<br/>PDF 扫描 → OCR<br/>Office → unstructured<br/>代码 → tree-sitter<br/>网页 → Readability"]
+    P1 --> C1["分块<br/>文档 parent-child<br/>代码 函数级<br/>表格 行列语义"]
+    C1 --> E1["批量嵌入<br/>bge-m3 dense+sparse"]
+    E1 --> I1[("Qdrant<br/>named vectors")]
+    E1 --> I2[("Postgres<br/>chunk 文本+关系")]
+    </pre>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>要点</th><th>设计</th></tr></thead>
+    <tbody>
+      <tr><td>生命周期状态机</td><td><code>uploaded → parsed → chunked → embedded → indexed → ready / failed</code>，每阶段落库，可重试、断点续传</td></tr>
+      <tr><td>幂等与增量</td><td>文件内容哈希去重；chunk 哈希变化才重新嵌入；网页按 URL 增量 upsert，源站删除则清理</td></tr>
+      <tr><td>parent-child</td><td>子块（≈512 token）检索，命中后回填父块（≈2048 token）入生成，兼顾召回精度与上下文完整</td></tr>
+      <tr><td>代码策略</td><td>函数/类级切分，chunk 头注入 <code>repo#path#symbol</code> 与 docstring，支持按仓库过滤</td></tr>
+      <tr><td>表格策略</td><td>MinerU 转 Markdown 后表头与每行分别建 chunk 并互挂引用，解决「表头丢失」问题</td></tr>
+      <tr><td>批量嵌入</td><td>Worker 攒批（128~256）调 TEI，dense + sparse 一次生成、双向量同时写入</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="retrieval">
+  <div class="eyebrow">Retrieval &amp; Generation</div>
+  <h2>检索与生成</h2>
+  <div class="fig">
+    <div class="fig-cap"><b>图 C</b> · 在线检索流程</div>
+    <pre class="mermaid">
+flowchart LR
+    Q["查询"] --> R0["路由 / 改写<br/>规则优先，LLM 可选"]
+    R0 --> D["dense 检索<br/>bge-m3 1024维"]
+    R0 --> S["sparse 检索<br/>bge-m3 学习稀疏"]
+    D --> F["RRF 融合 top-50"]
+    S --> F
+    F --> G["元数据预过滤<br/>KB / 类型 / 仓库 / 时间"]
+    G --> R["重排 bge-reranker-v2-m3<br/>top-8"]
+    R --> P["父文档扩展"]
+    P --> A["上下文组装 + 引用标注"]
+    </pre>
+  </div>
+  <ul>
+    <li><strong>混合检索</strong>：dense 语义召回 + sparse 关键词召回，RRF 融合（Qdrant Query API 原生，无外部编排）</li>
+    <li><strong>查询处理</strong>：规则型改写默认开启；LLM 改写（多查询、HyDE）作为可选增强，避免每次查询都烧 token</li>
+    <li><strong>过滤前置</strong>：KB / 类型 / 时间等标量过滤先于融合，缩小候选集</li>
+    <li><strong>生成策略</strong>：系统提示强制「仅依据给定上下文 + 逐条引用 [n]」；重排最高分低于阈值 → 明确拒答而非编造</li>
+    <li><strong>结构化引用</strong>：citations 字段随答案返回（chunk id → 来源文件 → 页码/行号；代码库为 <code>repo#path#symbol</code>），供 Agent 二次利用</li>
+    <li><strong>可选 GraphRAG</strong>：LightRAG 模块化接入，实体/关系独立索引，面向多跳问答，默认关闭（Phase 5）</li>
+  </ul>
+</section>
+
+<section id="storage">
+  <div class="eyebrow">Storage &amp; Capacity</div>
+  <h2>存储与容量规划</h2>
+  <h3>Qdrant Collection 设计</h3>
+  <ul>
+    <li><strong>命名向量</strong>：<code>dense</code>（1024 维 float32）+ <code>sparse</code>（bge-m3 学习稀疏）</li>
+    <li><strong>Payload 最小化</strong>：只存 <code>kb_id / doc_id / chunk_id / 类型 / 时间戳</code> 等过滤字段，chunk 正文存 Postgres，检索后按 id 回查，避免 Qdrant 膨胀</li>
+    <li><strong>HNSW</strong>：<code>m=16, ef_construct=200</code>；查询 <code>ef=128~256</code></li>
+  </ul>
+  <h3>容量估算（千万级 chunk）</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>项</th><th class="num">估算</th></tr></thead>
+    <tbody>
+      <tr><td>dense 向量（含 HNSW 开销）</td><td class="num">1024维 f32 = 4KB × 1000万 ≈ 40GB → 55~60GB</td></tr>
+      <tr><td>sparse 向量</td><td class="num">≈ 5~15GB</td></tr>
+      <tr><td>原始文件（MinIO）</td><td class="num">2~5TB（视平均文件大小）</td></tr>
+      <tr><td>元数据 + chunk 正文（Postgres）</td><td class="num">≈ 30~80GB</td></tr>
+      <tr><td>内存</td><td class="num">64GB 舒适（HNSW 常驻 + page cache），32GB 为下限</td></tr>
+      <tr><td>磁盘</td><td class="num">NVMe ≥ 2TB 建议</td></tr>
+    </tbody>
+  </table></div>
+  <h3>吞吐估算</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>环节</th><th class="num">估算</th></tr></thead>
+    <tbody>
+      <tr><td>嵌入</td><td class="num">GPU 批处理 ≈ 500~1500 chunk/s → 1000万 chunk ≈ 2~5 小时（模型侧）</td></tr>
+      <tr><td>解析</td><td class="num warn">MinerU 1~3 s/页（CPU）→ 数十万页需数天，是真正瓶颈，须多 Worker 横向扩展、支持分批导入</td></tr>
+      <tr><td>在线查询</td><td class="num">混合检索 + 重排端到端 P95 &lt; 500ms（目标）</td></tr>
+      <tr><td>生成</td><td class="num">Qwen3-8B AWQ ≈ 40~80 token/s（满足 Agent 场景）</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="api">
+  <div class="eyebrow">API &amp; MCP</div>
+  <h2>接口设计</h2>
+  <p class="note">统一响应信封（全接口一致）：</p>
+  <pre class="code">{
+  "success": true,
+  "data":    { },
+  "error":   null,
+  "meta":    { "total": 10, "page": 1 }
+}</pre>
+  <div class="tbl"><table>
+    <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>POST</td><td><code>/api/v1/kb</code></td><td>创建知识库（类型、解析配置）</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/kb/{id}</code></td><td>知识库详情（文档数、索引状态）</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/kb/{id}/documents</code></td><td>上传文档（multipart）或提交 URL</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/kb/{id}/documents/{doc_id}</code></td><td>文档摄取状态（状态机进度）</td></tr>
+      <tr><td>DELETE</td><td><code>/api/v1/kb/{id}/documents/{doc_id}</code></td><td>删除文档及全部 chunk</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/search</code></td><td>混合检索 + 重排，返回带引用 chunk</td></tr>
+      <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>OpenAI 兼容 RAG 生成（流式 + citations）</td></tr>
+      <tr><td>POST</td><td><code>/v1/embeddings</code></td><td>OpenAI 兼容嵌入代理</td></tr>
+      <tr><td>POST</td><td><code>/v1/rerank</code></td><td>重排代理（Cohere 风格兼容）</td></tr>
+    </tbody>
+  </table></div>
+  <h3>MCP Server（供 Claude Code 等 Agent 直连）</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Tool</th><th>参数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>search_knowledge</code></td><td>query, kb, top_k, filters</td><td>混合检索 + 重排，返回带引用 chunk</td></tr>
+      <tr><td><code>list_knowledge_bases</code></td><td>—</td><td>列出 Agent 有权限的 KB</td></tr>
+      <tr><td><code>ask</code></td><td>question, kb, stream</td><td>完整 RAG 问答（检索 + 生成）</td></tr>
+      <tr><td><code>ingest_document</code></td><td>path / url, kb</td><td>提交摄取任务，返回 job_id</td></tr>
+      <tr><td><code>get_document_status</code></td><td>job_id / doc_id</td><td>查询摄取进度</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">双 transport：stdio（本机 Claude Code 配置即用）+ streamable HTTP（远程 Agent 接入）；工具描述中嵌入 KB 目录与使用示例，提升 Agent 工具选择准确率。</p>
+</section>
+
+<section id="deploy">
+  <div class="eyebrow">Deploy &amp; Security</div>
+  <h2>部署与安全</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>容器</th><th class="num">资源</th><th>GPU</th><th class="num">端口</th></tr></thead>
+    <tbody>
+      <tr><td>api（FastAPI）</td><td class="num">2C/2G</td><td>否</td><td class="num">8000</td></tr>
+      <tr><td>mcp（MCP Server）</td><td class="num">1C/1G</td><td>否</td><td class="num">8100</td></tr>
+      <tr><td>web（Vue 静态 + nginx）</td><td class="num">1C/0.5G</td><td>否</td><td class="num">8080</td></tr>
+      <tr><td>workers × N（解析/嵌入/爬虫）</td><td class="num">4C/8G</td><td>否（走 TEI）</td><td class="num">—</td></tr>
+      <tr><td>qdrant</td><td class="num">8C/32G</td><td>否</td><td class="num">6333</td></tr>
+      <tr><td>postgres</td><td class="num">4C/16G</td><td>否</td><td class="num">5432</td></tr>
+      <tr><td>redis</td><td class="num">2C/8G</td><td>否</td><td class="num">6379</td></tr>
+      <tr><td>minio</td><td class="num">2C/4G</td><td>否</td><td class="num">9000</td></tr>
+      <tr><td>vllm（Qwen3）</td><td class="num">—</td><td><b>是</b></td><td class="num">9001</td></tr>
+      <tr><td>tei（bge-m3）</td><td class="num">—</td><td><b>是</b></td><td class="num">9002</td></tr>
+      <tr><td>tei（reranker）</td><td class="num">—</td><td>是（可降 CPU）</td><td class="num">9003</td></tr>
+      <tr><td>flower / prometheus / grafana</td><td class="num">各 1C</td><td>否</td><td class="num">5555 / 9090 / 3000</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>编排：<code>docker-compose</code> 起步，<code>nvidia-container-toolkit</code> 直通 GPU</li>
+    <li><strong>平台提示</strong>：开发可在 Windows（WSL2 GPU 直通）；生产建议 Linux 服务器（GPU 直通、vLLM 兼容性、IO 性能更佳）</li>
+    <li>扩展路径：API/检索无状态水平扩展；超千万级 chunk 评估 Qdrant 集群或迁 Milvus 分布式；GPU 扩容后按 Profile 升级模型</li>
+  </ul>
+  <h3>安全设计</h3>
+  <ul>
+    <li>默认绑定 <code>127.0.0.1/内网</code>，对外暴露需显式配置 + TLS</li>
+    <li>API Key 哈希存储，KB 级 ACL（哪个 Key 能读哪些知识库）</li>
+    <li>Redis 令牌桶限流（按 Key + 按 KB 双维度）；上传校验（扩展名 + MIME + 大小上限，可选 ClamAV）</li>
+    <li>爬虫 SSRF 防护：禁内网/回环地址，域名白名单；日志脱敏：不落 API Key 与敏感内容片段</li>
+  </ul>
+</section>
+
+<section id="adr">
+  <div class="eyebrow">Decisions</div>
+  <h2>关键技术决策</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>决策</th><th>选择</th><th>备选</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>向量库</td><td><b>Qdrant 单机</b></td><td>Milvus / pgvector</td><td>本规模运维最简单；named vectors + sparse + RRF 原生；超千万级再评估 Milvus</td></tr>
+      <tr><td>嵌入模型</td><td><b>bge-m3</b></td><td>Qwen3-Embedding / e5</td><td>一模型三用（dense/sparse/多向量），中英多语言，生态成熟</td></tr>
+      <tr><td>推理框架</td><td><b>vLLM + TEI</b></td><td>Ollama / Xinference</td><td>服务化吞吐与 OpenAI 兼容；TEI 专精嵌入/重排，显存占用低</td></tr>
+      <tr><td>生成模型</td><td><b>Qwen3-8B-AWQ</b></td><td>14B / DeepSeek 蒸馏</td><td>中文强 + 显存友好；14B 为 16GB 卡升级路径</td></tr>
+      <tr><td>解析主线</td><td><b>MinerU + PaddleOCR</b></td><td>unstructured 兜底</td><td>中文版面/公式/表格最优</td></tr>
+      <tr><td>自建 vs 平台</td><td><b>自建服务层</b></td><td>RAGFlow / Dify</td><td>平台是应用定位；供 Agent 调用的服务需要 API 级可控性</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="risks">
+  <div class="eyebrow">Risks</div>
+  <h2>风险与缓解</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>风险</th><th>影响</th><th>缓解</th></tr></thead>
+    <tbody>
+      <tr><td><b>Turing SM75 兼容性</b>（vLLM 回归/AWQ 内核） <span class="badge b-crit">高</span></td><td>生成吞吐跌至 ~1 tok/s 或加载失败</td><td>版本钉扎 + llama.cpp 备选栈 + Phase 0 Spike 实测矩阵</td></tr>
+      <tr><td><b>解析质量差</b>（扫描件/复杂版面） <span class="badge b-crit">高</span></td><td>垃圾进垃圾出</td><td>MinerU + OCR 双通道、解析结果抽检、chunk 质检工具</td></tr>
+      <tr><td><b>16GB 显存紧张</b> <span class="badge b-warn">中</span></td><td>14B 无法常驻</td><td>Profile 分级；reranker 可降 CPU；KV cache 调优</td></tr>
+      <tr><td><b>千万级 chunk 冷启动慢</b> <span class="badge b-warn">中</span></td><td>知识库上线慢</td><td>解析 Worker 横向扩展、分批导入、增量更新</td></tr>
+      <tr><td><b>中文表格/公式检索质量</b> <span class="badge b-warn">中</span></td><td>命中率低</td><td>表格专用分块策略、bge-m3 多语言、评估集驱动迭代</td></tr>
+      <tr><td><b>检索质量不可度量</b> <span class="badge b-crit">高</span></td><td>无法迭代</td><td>Day 1 建评测集，RAGAS 回归进 CI</td></tr>
+      <tr><td><b>代码与文档混库召回污染</b> <span class="badge b-warn">中</span></td><td>答案噪声</td><td>KB 类型隔离 + 查询路由 + 类型过滤</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="roadmap">
+  <div class="eyebrow">Roadmap</div>
+  <h2>实施路线（六阶段）</h2>
+  <div class="phases">
+    <div class="phase"><div class="phase-num">0</div><div><div class="phase-name">MVP 最小可用<small>2~3 天</small></div><div class="phase-deliv">骨架仓库；Qdrant + bge-m3（dense-only）+ Qwen3 直连；单文件同步摄取；<code>/search</code> + <code>/chat</code> 可用</div></div></div>
+    <div class="phase"><div class="phase-num">1</div><div><div class="phase-name">摄取管线<small>1~2 周</small></div><div class="phase-deliv">MinerU/PaddleOCR 接入；Celery 异步 + 状态机 + 去重断点；支持 10 万文档批量导入</div></div></div>
+    <div class="phase"><div class="phase-num">2</div><div><div class="phase-name">检索增强<small>1 周</small></div><div class="phase-deliv">sparse + RRF 混合检索；reranker；parent-child；代码 tree-sitter 检索；查询路由</div></div></div>
+    <div class="phase"><div class="phase-num">3</div><div><div class="phase-name">服务化<small>1 周</small></div><div class="phase-deliv">MCP Server（双 transport）；OpenAI 兼容接口；API Key + 限流</div></div></div>
+    <div class="phase"><div class="phase-num">4</div><div><div class="phase-name">平台化<small>1 周</small></div><div class="phase-deliv">Web 管理端；Prometheus/Grafana；结构化日志与 trace_id</div></div></div>
+    <div class="phase"><div class="phase-num">5</div><div><div class="phase-name">深化<small>持续</small></div><div class="phase-deliv">RAGAS 评估闭环；网页爬虫增量；可选 LightRAG；压测调优</div></div></div>
+    <div class="phase"><div class="phase-num">6</div><div><div class="phase-name">生产就绪<small>验收制</small></div><div class="phase-deliv">七项全绿：安全审计 / 备份恢复演练 / SLO 压测 / 故障演练 / 发布回滚 runbook / 灰度放量 / Linux 迁移验收 → v1.0.0</div></div></div>
+  </div>
+</section>
+
+<footer>
+  <span><b>LocalRAGServer</b> · 架构蓝图 v1.0</span>
+  <span>2026-08-14 · 与 docs/architecture.md 同步</span>
+</footer>
+
+</div>

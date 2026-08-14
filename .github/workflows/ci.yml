@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    name: 质量门禁（lint/类型/安全/覆盖率/冒烟）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: 安装依赖（dev extra，无 GPU 无外联模型）
+        run: uv sync --extra dev
+      - name: ruff
+        run: uv run ruff check .
+      - name: pyright
+        run: uv run pyright core apps scripts eval
+      - name: bandit
+        run: uv run bandit -r core apps scripts -q
+      - name: pip-audit
+        run: uv run pip-audit
+      - name: pytest + 覆盖率门禁（≥80%）
+        run: uv run pytest --cov --cov-fail-under=80
+      - name: 冒烟脚本（全链路回归基线）
+        run: uv run python scripts/smoke.py
+
+  eval-regression:
+    name: 检索回归（评测集 v1 基线）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --extra dev
+      - name: 评测集校验
+        run: >
+          uv run python -c "from eval.dataset import load_qa, validate_dataset; import sys;
+          es = validate_dataset(load_qa()); print(es); sys.exit(1 if es else 0)"
+      - name: 检索回归（recall@10 / MRR@10 报告）
+        run: uv run python -m eval.run_retrieval
+
+  gpu-nightly:
+    name: GPU 实测（自托管 runner，手动触发）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: 嵌入实测（需 CUDA torch 与 bge-m3 缓存）
+        run: uv run python scripts/spike/bench_embedding.py
+      - name: 生成实测（需 llama.cpp 与 GGUF 预置）
+        run: uv run python scripts/spike/bench_llamacpp.py --ngl 40 --tokens 128

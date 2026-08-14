@@ -1,0 +1,233 @@
+"""API 集成测试：真实 Qdrant 本地模式 + SQLite + stub 嵌入 + 假 LLM 服务。
+
+共享 client fixture 定义于 conftest.py。
+"""
+import json
+
+from fastapi.testclient import TestClient
+
+from apps.api.main import create_app
+from core.config import Settings
+
+
+def _md_file(name="note.md", content="# 标题\n\n这是文档正文。量子计算使用量子比特。"):
+    return {"file": (name, content.encode("utf-8"), "text/markdown")}
+
+
+def _create_kb(client) -> str:
+    return client.post("/api/v1/kb", json={"name": "库"}).json()["data"]["id"]
+
+
+def _set_llm_response(server, content: str):
+    handler = server.RequestHandlerClass
+    handler.response_status = 200
+    handler.response_body = json.dumps(
+        {"choices": [{"message": {"role": "assistant", "content": content}}]}
+    ).encode("utf-8")
+
+
+# ---------- 运维 ----------
+
+
+def test_health(client):
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+# ---------- 知识库 ----------
+
+
+def test_create_list_get_kb(client):
+    resp = client.post("/api/v1/kb", json={"name": "测试库", "kb_type": "document"})
+    assert resp.status_code == 201
+    kb_id = resp.json()["data"]["id"]
+
+    listing = client.get("/api/v1/kb").json()
+    assert listing["success"] and len(listing["data"]) == 1
+
+    detail = client.get(f"/api/v1/kb/{kb_id}").json()
+    assert detail["data"]["name"] == "测试库"
+
+    missing = client.get("/api/v1/kb/nonexistent")
+    assert missing.status_code == 404
+    assert missing.json()["success"] is False
+
+
+def test_create_kb_rejects_bad_type(client):
+    resp = client.post("/api/v1/kb", json={"name": "x", "kb_type": "image"})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "validation_error"
+
+
+# ---------- 文档 ----------
+
+
+def test_upload_search_delete_flow(client):
+    kb_id = _create_kb(client)
+    up = client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+    assert up.status_code == 201
+    doc = up.json()["data"]
+    assert doc["status"] == "ready"
+    assert doc["chunk_count"] >= 1
+
+    search = client.post(
+        "/api/v1/search", json={"query": "量子比特", "kb_id": kb_id, "top_k": 3}
+    ).json()
+    assert search["success"] and search["data"]
+
+    dele = client.delete(f"/api/v1/kb/{kb_id}/documents/{doc['id']}")
+    assert dele.status_code == 200
+    after = client.post("/api/v1/search", json={"query": "量子比特", "kb_id": kb_id}).json()
+    assert after["data"] == []
+
+
+def test_upload_rejects_unsupported_format(client):
+    kb_id = _create_kb(client)
+    resp = client.post(
+        f"/api/v1/kb/{kb_id}/documents",
+        files={"file": ("bad.docx", b"x", "application/octet-stream")},
+    )
+    assert resp.status_code == 415
+    assert resp.json()["error"]["code"] == "unsupported_format"
+
+
+def test_upload_rejects_content_mismatching_extension(client):
+    # 审计 F-07：扩展名与文件内容魔数不符 → 拒绝（MIME 魔数校验，不信任扩展名）
+    kb_id = _create_kb(client)
+    resp = client.post(
+        f"/api/v1/kb/{kb_id}/documents",
+        files={"file": ("fake.pdf", b"this is not a pdf", "application/pdf")},
+    )
+    assert resp.status_code == 415
+    assert resp.json()["error"]["code"] == "invalid_file_content"
+
+
+def test_upload_empty_document_422(client):
+    kb_id = _create_kb(client)
+    resp = client.post(
+        f"/api/v1/kb/{kb_id}/documents",
+        files={"file": ("empty.md", b"   ", "text/markdown")},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "empty_document"
+
+
+def test_upload_duplicate_is_idempotent(client):
+    kb_id = _create_kb(client)
+    first = client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file()).json()
+    second = client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file()).json()
+    assert first["data"]["id"] == second["data"]["id"]
+    listing = client.get(f"/api/v1/kb/{kb_id}/documents").json()
+    assert listing["meta"]["total"] == 1
+
+
+# ---------- 检索 ----------
+
+
+def test_search_unknown_kb_404(client):
+    resp = client.post("/api/v1/search", json={"query": "x", "kb_id": "nope"})
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "kb_not_found"
+
+
+# ---------- Chat ----------
+
+
+def test_chat_with_rag_returns_content_and_citations(client, fake_llm_server):
+    _set_llm_response(fake_llm_server, "量子比特是量子计算的基本单元。[1]")
+    kb_id = _create_kb(client)
+    client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "什么是量子比特？"}],
+            "rag_kb_id": kb_id,
+            "rag_top_k": 3,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"]["content"] == "量子比特是量子计算的基本单元。[1]"
+    citations = body["choices"][0]["message"]["citations"]
+    # 上传文档标题保留原始文件名（含扩展名）
+    assert citations and citations[0]["doc_title"] == "note.md"
+
+
+def test_chat_refuses_without_calling_llm(client, fake_llm_server, tmp_path, auth_headers):
+    # 阈值调高 → 命中分数不足 → 拒答且不调用 LLM
+    settings = Settings(
+        data_dir=tmp_path / "data2",
+        qdrant_path=tmp_path / "qdrant2",
+        database_url=f"sqlite:///{tmp_path / 'registry2.db'}",
+        embedding_backend="stub",
+        embedding_dim=64,
+        llm_base_url=f"http://127.0.0.1:{fake_llm_server.server_port}/v1",
+        llm_model="qwen-test",
+        refusal_threshold=1.0,
+        api_key=auth_headers["Authorization"].removeprefix("Bearer "),
+    )
+    app = create_app(settings)
+    with TestClient(app, headers=auth_headers) as strict:
+        _set_llm_response(fake_llm_server, "不应出现的回答")
+        kb_id = strict.post("/api/v1/kb", json={"name": "库"}).json()["data"]["id"]
+        strict.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+        resp = strict.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "什么是量子比特？"}],
+                "rag_kb_id": kb_id,
+            },
+        )
+        assert resp.json()["choices"][0]["message"]["content"] == "知识库中未找到相关内容。"
+        assert fake_llm_server.RequestHandlerClass.calls == 0
+
+
+def test_chat_passthrough_without_rag(client, fake_llm_server):
+    _set_llm_response(fake_llm_server, "纯透传回答")
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "你好"}]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["choices"][0]["message"]["content"] == "纯透传回答"
+
+
+def test_chat_with_rag_streams(client, fake_llm_server):
+    body = (
+        'data: {"choices": [{"delta": {"content": "流式"}}]}\n\n'
+        'data: {"choices": [{"delta": {"content": "回答"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    handler = fake_llm_server.RequestHandlerClass
+    handler.response_status = 200
+    handler.response_body = body.encode("utf-8")
+    kb_id = _create_kb(client)
+    client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "messages": [{"role": "user", "content": "量子比特"}],
+            "rag_kb_id": kb_id,
+            "stream": True,
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        content = "".join(
+            json.loads(line[len("data:") :])["choices"][0]["delta"]["content"]
+            for line in resp.iter_lines()
+            if line.startswith("data:") and line != "data: [DONE]"
+        )
+    assert content == "流式回答"
+
+
+def test_chat_unknown_kb_404(client):
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "x"}], "rag_kb_id": "nope"},
+    )
+    assert resp.status_code == 404

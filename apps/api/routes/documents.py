@@ -1,0 +1,119 @@
+"""文档路由：上传、列表、状态查询、删除（MVP 为同步摄取，Phase 1 换 Celery 异步）。"""
+import tempfile
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, UploadFile
+
+from apps.api.deps import get_registry, get_search_service, get_settings
+from apps.api.errors import (
+    DOC_NOT_FOUND,
+    EMPTY_DOCUMENT,
+    INVALID_FILE_CONTENT,
+    KB_NOT_FOUND,
+    PAYLOAD_TOO_LARGE,
+    TOO_MANY_PAGES,
+    UNSUPPORTED_FORMAT,
+    raise_http,
+)
+from apps.api.schemas import DocumentOut, Envelope, ok
+from core.config import Settings
+from core.ingest.parsers import (
+    SUPPORTED_SUFFIXES,
+    TooManyPagesError,
+    UnsupportedFormatError,
+    check_signature,
+)
+from core.retrieval.search import EmptyDocumentError, SearchService
+from core.storage.registry import Registry
+
+router = APIRouter()
+
+_READ_CHUNK = 1024 * 1024
+_SIGNATURE_BYTES = 8
+
+RegistryDep = Annotated[Registry, Depends(get_registry)]
+SearchServiceDep = Annotated[SearchService, Depends(get_search_service)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def _require_kb(registry: Registry, kb_id: str) -> None:
+    if registry.get_kb(kb_id) is None:
+        raise_http(404, KB_NOT_FOUND, "知识库不存在")
+
+
+@router.post("/kb/{kb_id}/documents", response_model=Envelope[DocumentOut], status_code=201)
+def upload_document(
+    kb_id: str,
+    file: Annotated[UploadFile, File()],
+    registry: RegistryDep,
+    search_service: SearchServiceDep,
+    settings: SettingsDep,
+):
+    _require_kb(registry, kb_id)
+    filename = Path(file.filename or "").name  # 仅取 basename，防路径穿越
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise_http(415, UNSUPPORTED_FORMAT, f"不支持的文件格式：{suffix or '(无扩展名)'}")
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise_http(413, PAYLOAD_TOO_LARGE, f"文件超过大小限制（{settings.max_upload_mb}MB）")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    dest = Path(tmp.name)
+    try:
+        with tmp:
+            total = 0
+            while chunk := file.file.read(_READ_CHUNK):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise_http(
+                        413, PAYLOAD_TOO_LARGE, f"文件超过大小限制（{settings.max_upload_mb}MB）"
+                    )
+                tmp.write(chunk)
+        # 魔数校验：不信任客户端声明的扩展名（审计 F-07）
+        head = dest.read_bytes()[: _SIGNATURE_BYTES]
+        if not check_signature(suffix, head):
+            raise_http(415, INVALID_FILE_CONTENT, f"文件内容与扩展名 {suffix} 不符")
+        doc = search_service.ingest_file(
+            kb_id, dest, title=filename, source=f"upload://{filename}"
+        )
+    except UnsupportedFormatError as exc:
+        raise_http(415, UNSUPPORTED_FORMAT, str(exc))
+    except TooManyPagesError as exc:
+        raise_http(422, TOO_MANY_PAGES, str(exc))
+    except EmptyDocumentError as exc:
+        raise_http(422, EMPTY_DOCUMENT, str(exc))
+    finally:
+        dest.unlink(missing_ok=True)
+    return ok(DocumentOut.model_validate(doc))
+
+
+@router.get("/kb/{kb_id}/documents", response_model=Envelope[list[DocumentOut]])
+def list_documents(kb_id: str, registry: RegistryDep):
+    _require_kb(registry, kb_id)
+    docs = registry.list_documents(kb_id)
+    return ok([DocumentOut.model_validate(d) for d in docs], meta={"total": len(docs)})
+
+
+@router.get("/kb/{kb_id}/documents/{doc_id}", response_model=Envelope[DocumentOut])
+def get_document(kb_id: str, doc_id: str, registry: RegistryDep):
+    _require_kb(registry, kb_id)
+    doc = registry.get_document(kb_id, doc_id)
+    if doc is None:
+        raise_http(404, DOC_NOT_FOUND, "文档不存在")
+    return ok(DocumentOut.model_validate(doc))
+
+
+@router.delete("/kb/{kb_id}/documents/{doc_id}", response_model=Envelope[None])
+def delete_document(
+    kb_id: str,
+    doc_id: str,
+    registry: RegistryDep,
+    search_service: SearchServiceDep,
+):
+    _require_kb(registry, kb_id)
+    if registry.get_document(kb_id, doc_id) is None:
+        raise_http(404, DOC_NOT_FOUND, "文档不存在")
+    search_service.delete_document(kb_id, doc_id)
+    return ok()
