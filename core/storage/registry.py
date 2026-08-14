@@ -9,6 +9,7 @@ pyright 类型摩擦说明：SQLModel 不用 SQLAlchemy 2.0 的 Mapped 注解风
 故本文件关闭 reportArgumentType（属 SQLModel + pyright 的已知组合限制）。
 """
 # pyright: reportArgumentType=false
+import json
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from core.ingest.chunker import Chunk
 from core.ingest.state import Stage, assert_transition
+from core.security.acl import hash_api_key, key_prefix, verify_api_key
 
 
 def _utcnow() -> datetime:
@@ -45,6 +47,19 @@ class Document(SQLModel, table=True):
     # 解析管线版本戳（审计 ARC-003：parser+chunker+embedder 三元组；策略变更后据此重索引）
     pipeline_version: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ApiKey(SQLModel, table=True):
+    """API Key（架构 §8.1；设计 docs/design/acl-enforcement.md）。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    name: str
+    key_prefix: str = Field(index=True)  # 前缀索引（8 字符，加速查找）
+    key_hash: str  # scrypt 慢哈希 + 盐（明文绝不落库）
+    kb_acl: str = Field(default='["*"]')  # json：["kb1",...] 或 ["*"]
+    expires_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_used_at: datetime | None = None
 
 
 class IngestJob(SQLModel, table=True):
@@ -223,6 +238,61 @@ class Registry:
     def count_documents(self, kb_id: str) -> int:
         with Session(self._engine) as s:
             return len(s.exec(select(Document).where(Document.kb_id == kb_id)).all())
+
+    # ---------- API Key（ACL 强制点，审计 F-13/F-02） ----------
+
+    def create_api_key(
+        self,
+        name: str,
+        kb_acl: list[str] | None = None,
+        expires_at: datetime | None = None,
+    ) -> tuple[ApiKey, str]:
+        """签发 Key：返回 (记录, 明文)；明文仅此一次，DB 只存 scrypt 哈希。"""
+        import secrets as _secrets
+
+        raw = _secrets.token_urlsafe(32)
+        record = ApiKey(
+            name=name,
+            key_prefix=key_prefix(raw),
+            key_hash=hash_api_key(raw),
+            kb_acl=json.dumps(kb_acl or ["*"], ensure_ascii=False),
+            expires_at=expires_at,
+        )
+        with Session(self._engine) as s:
+            s.add(record)
+            s.commit()
+            s.refresh(record)
+        return record, raw
+
+    def verify_api_key(self, raw: str) -> ApiKey | None:
+        """前缀查找 + scrypt 验证 + 过期检查；通过则返回记录并刷新 last_used_at。"""
+        prefix = key_prefix(raw)
+        with Session(self._engine) as s:
+            candidates = s.exec(
+                select(ApiKey).where(ApiKey.key_prefix == prefix)  # type: ignore[arg-type]
+            ).all()
+            for record in candidates:
+                if not verify_api_key(raw, record.key_hash):
+                    continue
+                # SQLite 存取丢失时区信息：统一用 naive UTC 比较
+                now = _utcnow().replace(tzinfo=None)
+                if record.expires_at is not None and record.expires_at <= now:
+                    return None
+                record.last_used_at = now
+                s.add(record)
+                s.commit()
+                s.refresh(record)  # 防止会话关闭后属性过期（DetachedInstanceError）
+                return record
+        return None
+
+    def revoke_api_key(self, key_id: str) -> None:
+        with Session(self._engine) as s:
+            s.exec(delete(ApiKey).where(ApiKey.id == key_id))  # type: ignore[arg-type]
+            s.commit()
+
+    def get_api_key(self, key_id: str) -> ApiKey | None:
+        with Session(self._engine) as s:
+            return s.get(ApiKey, key_id)
 
     # ---------- 摄取任务（状态机） ----------
 

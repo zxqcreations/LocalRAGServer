@@ -11,7 +11,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from apps.api.deps import get_chat_client, get_registry, get_search_service, get_settings
+from apps.api.deps import (
+    get_allowed_kbs,
+    get_chat_client,
+    get_registry,
+    get_search_service,
+    get_settings,
+)
 from apps.api.errors import KB_NOT_FOUND, raise_http
 from apps.api.schemas import (
     ChatChoice,
@@ -25,6 +31,7 @@ from core.config import Settings
 from core.generation.llm import ChatClient, build_rag_messages
 from core.generation.refusal import refusal_field, should_refuse
 from core.retrieval.search import SearchService
+from core.security.acl import AllowedKbs, require_kb_access
 from core.storage.registry import Registry
 
 router = APIRouter()
@@ -35,6 +42,7 @@ RegistryDep = Annotated[Registry, Depends(get_registry)]
 SearchServiceDep = Annotated[SearchService, Depends(get_search_service)]
 ChatClientDep = Annotated[ChatClient, Depends(get_chat_client)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+AllowedKbsDep = Annotated[AllowedKbs, Depends(get_allowed_kbs)]
 
 
 def _citations(results) -> list[Citation]:
@@ -72,12 +80,14 @@ def chat_completions(
     search_service: SearchServiceDep,
     chat_client: ChatClientDep,
     settings: SettingsDep,
+    allowed: AllowedKbsDep,
 ):
     model = body.model or settings.llm_model
     question = body.messages[-1].content if body.messages[-1].role == "user" else ""
     citations: list[Citation] = []
 
     if body.rag_kb_id is not None:
+        require_kb_access(body.rag_kb_id, allowed)  # ACL 强制点（生成链路）
         if registry.get_kb(body.rag_kb_id) is None:
             raise_http(404, KB_NOT_FOUND, "知识库不存在")
         results = search_service.search(body.rag_kb_id, question, body.rag_top_k)

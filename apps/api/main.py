@@ -1,4 +1,5 @@
 """FastAPI 应用工厂、生命周期、认证中间件与统一异常信封。"""
+import json
 import logging
 from contextlib import asynccontextmanager
 from secrets import compare_digest
@@ -7,9 +8,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from apps.api.errors import AUTH_INVALID, AUTH_REQUIRED, AUTH_UNCONFIGURED
+from apps.api.errors import (
+    ACL_DENIED,
+    AUTH_INVALID,
+    AUTH_REQUIRED,
+    AUTH_UNCONFIGURED,
+)
 from apps.api.routes import chat, documents, kb, search
 from apps.api.schemas import err
+from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
 from core.retrieval.embeddings import build_embedder
@@ -87,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health():
         return {"success": True, "data": {"status": "ok"}, "error": None, "meta": None}
 
-    # ---- 最小认证骨架（审计 F-01：随第一批接口同批交付；KB 级 ACL 属 Phase 3） ----
+    # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
@@ -105,8 +112,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=401, content=err(AUTH_REQUIRED, "缺少 Bearer API Key")
             )
-        if not compare_digest(header[len("Bearer ") :], settings.api_key):
+        raw_key = header[len("Bearer ") :]
+        # 1) 引导主 Key（settings.api_key）：全权限，Phase 4 Web 端接管签发
+        if compare_digest(raw_key, settings.api_key):
+            request.state.allowed_kbs = "*"
+            return await call_next(request)
+        # 2) api_keys 表 Key：scrypt 验证 + ACL 解析（F-13 强制点）
+        record = app.state.registry.verify_api_key(raw_key)
+        if record is None:
             return JSONResponse(status_code=401, content=err(AUTH_INVALID, "API Key 无效"))
+        request.state.allowed_kbs = resolve_allowed_kb_ids(json.loads(record.kb_acl))
+        request.state.api_key_record = record
         return await call_next(request)
 
     # ---- 统一异常信封 ----
@@ -127,6 +143,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=422, content=err("validation_error", "请求参数校验失败")
         )
+
+    @app.exception_handler(AclDeniedError)
+    async def _acl_exc(request: Request, exc: AclDeniedError):
+        # 审计 F-13：越权显式 403（不用 404/空结果掩盖，避免可探测性歧义）
+        return JSONResponse(status_code=403, content=err(ACL_DENIED, str(exc)))
 
     @app.exception_handler(Exception)
     async def _unhandled_exc(request: Request, exc: Exception):

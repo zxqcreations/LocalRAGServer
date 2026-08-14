@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, UploadFile
 
-from apps.api.deps import get_registry, get_search_service, get_settings
+from apps.api.deps import get_allowed_kbs, get_registry, get_search_service, get_settings
 from apps.api.errors import (
     DOC_NOT_FOUND,
     EMPTY_DOCUMENT,
@@ -29,6 +29,7 @@ from core.ingest.parsers import (
 )
 from core.ingest.tasks import enqueue_ingest
 from core.retrieval.search import EmptyDocumentError, SearchService
+from core.security.acl import AllowedKbs, require_kb_access
 from core.security.ssrf import FetchError, SsrfBlockedError, UrlFetcher
 from core.storage.registry import Registry
 
@@ -40,9 +41,11 @@ _SIGNATURE_BYTES = 8
 RegistryDep = Annotated[Registry, Depends(get_registry)]
 SearchServiceDep = Annotated[SearchService, Depends(get_search_service)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+AllowedKbsDep = Annotated[AllowedKbs, Depends(get_allowed_kbs)]
 
 
-def _require_kb(registry: Registry, kb_id: str) -> None:
+def _require_kb(registry: Registry, kb_id: str, allowed: AllowedKbs) -> None:
+    require_kb_access(kb_id, allowed)  # ACL 强制点（摄取/删除/URL 全路径，审计 F-13）
     if registry.get_kb(kb_id) is None:
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
 
@@ -54,8 +57,9 @@ def upload_document(
     registry: RegistryDep,
     search_service: SearchServiceDep,
     settings: SettingsDep,
+    allowed: AllowedKbsDep,
 ):
-    _require_kb(registry, kb_id)
+    _require_kb(registry, kb_id, allowed)
     filename = Path(file.filename or "").name  # 仅取 basename，防路径穿越
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
@@ -102,9 +106,10 @@ def ingest_url(
     body: UrlIngestRequest,
     registry: RegistryDep,
     settings: SettingsDep,
+    allowed: AllowedKbsDep,
 ):
     """URL 摄取（异步管线）：SSRF 防护与能力同批交付（审计 F-10）。"""
-    _require_kb(registry, kb_id)
+    _require_kb(registry, kb_id, allowed)
     allowlist = {d.strip() for d in settings.url_allowlist.split(",") if d.strip()}
     fetcher = UrlFetcher(
         allowlist=allowlist,
@@ -131,15 +136,15 @@ def ingest_url(
 
 
 @router.get("/kb/{kb_id}/documents", response_model=Envelope[list[DocumentOut]])
-def list_documents(kb_id: str, registry: RegistryDep):
-    _require_kb(registry, kb_id)
+def list_documents(kb_id: str, registry: RegistryDep, allowed: AllowedKbsDep):
+    _require_kb(registry, kb_id, allowed)
     docs = registry.list_documents(kb_id)
     return ok([DocumentOut.model_validate(d) for d in docs], meta={"total": len(docs)})
 
 
 @router.get("/kb/{kb_id}/documents/{doc_id}", response_model=Envelope[DocumentOut])
-def get_document(kb_id: str, doc_id: str, registry: RegistryDep):
-    _require_kb(registry, kb_id)
+def get_document(kb_id: str, doc_id: str, registry: RegistryDep, allowed: AllowedKbsDep):
+    _require_kb(registry, kb_id, allowed)
     doc = registry.get_document(kb_id, doc_id)
     if doc is None:
         raise_http(404, DOC_NOT_FOUND, "文档不存在")
@@ -152,8 +157,9 @@ def delete_document(
     doc_id: str,
     registry: RegistryDep,
     search_service: SearchServiceDep,
+    allowed: AllowedKbsDep,
 ):
-    _require_kb(registry, kb_id)
+    _require_kb(registry, kb_id, allowed)
     if registry.get_document(kb_id, doc_id) is None:
         raise_http(404, DOC_NOT_FOUND, "文档不存在")
     search_service.delete_document(kb_id, doc_id)
