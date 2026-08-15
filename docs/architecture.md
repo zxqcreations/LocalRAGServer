@@ -1,6 +1,7 @@
 # LocalRAGServer 技术架构设计
 
-> 版本 v1.3 · 2026-08-15（v1.3 变更：Phase 2/3 落地回填——混合检索 BM25+RRF 实测 MRR +8.1pp、ACL 强制层、MCP 双 transport、限流本地化 ADR-005、审计管线、探针）
+> 版本 v2.0-draft · 2026-08-15（v2.0 草案变更：Phase 4/5 落地回填——Web 管理端五模块 + 独立会话认证、structlog 全链路、RAGAS 评测闭环、URL 订阅爬取、压测基线；§19-21 为草案新增章节，正式批准随 Phase 6 DoD）
+> v1.3 变更：Phase 2/3 落地回填——混合检索 BM25+RRF 实测 MRR +8.1pp、ACL 强制层、MCP 双 transport、限流本地化 ADR-005、审计管线、探针
 > 输入约束：NVIDIA GPU 8~16GB 单机（实机 RTX 2080 Ti 11GB，Turing SM75）· 十万级文档（≈千万级 chunk）· PDF/Office/代码/网页 · 中英混合 · 服务对象为 Agent（MCP + REST）+ 人工管理端（Web）
 
 ## 1. 目标与定位
@@ -370,3 +371,30 @@ LocalRAGServer/
 ├── docs/
 └── pyproject.toml
 ```
+
+## 19. URL 订阅爬取（v2.0 草案 · Phase 5 落地）
+
+| 维度 | 设计 |
+|---|---|
+| 数据模型 | `UrlSubscription`（kb_id + url 唯一；interval_hours；last_content_hash 变更检测；next_fetch_at 调度游标；enabled 暂停开关） |
+| 调度 | Celery beat `crawl.due`（10 分钟周期）扫描到期订阅串行抓取（按 URL 稳定序）；worker `-B` 启动 |
+| 变更语义 | 内容哈希变化 → 复用 URL 摄取链路（幂等键 kb_id+content_hash，**旧版保留**可回溯）；未变化零摄取成本 |
+| 安全 | SSRF 5 层防护全复用（协议白名单/DNS 全 IP 校验/逐跳重校验/大小上限）；管理端 admin 角色方可订阅 |
+| 失败 | last_error 记录 + 退避 interval_hours（design/url-crawler.md 契约） |
+
+## 20. 评测闭环（v2.0 草案 · Phase 5 落地）
+
+| 维度 | 设计 |
+|---|---|
+| 离线检索回归 | recall@10/MRR@10（eval/run_retrieval.py，CI eval-regression job，基线门禁容差 0.05） |
+| RAGAS 四指标 | faithfulness/answer_relevancy/context_precision/context_recall（eval/ragas_runner.py；llama-server 评判 + bge-m3 同源嵌入；基线 0.872/0.748/0.925/0.98） |
+| 版本化 | DATASET_VERSION=v1；基线/报告携带版本，跨版本不可比（quality.md 门禁第 9 项） |
+| 污染隔离 | 评测集为独立种子语料（eval/fixtures）；线上真实查询不入评测集 |
+
+## 21. 压测基线（v2.0 草案 · Phase 5 落地）
+
+| 维度 | 实测（2026-08-15） |
+|---|---|
+| 摄取吞吐 | 合成文档口径 3928 文档/小时（stub 管线开销）；10 万级外推 ≈ 25 小时单进程，多 Worker 线性分摊 |
+| 在线查询 | P95 18.4ms（stub 口径，目标 <500ms 达标）；GPU 口径留 gpu-nightly |
+| 深度解析 | MinerU 大文档单机 CPU 超时风险 → pymupdf 快速通道（§8.4 既有结论） |

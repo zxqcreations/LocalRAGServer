@@ -77,3 +77,7 @@ jobs:
         run: uv run python scripts/spike/bench_embedding.py
       - name: 生成实测（需 llama.cpp 与 GGUF 预置）
         run: uv run python scripts/spike/bench_llamacpp.py --ngl 40 --tokens 128
+      - name: RAGAS 评测基线门禁（需 ragas 依赖 + llama-server 预置）
+        run: |
+          uv run python scripts/prepare_eval_kbs.py
+          uv run python -m eval.ragas_runner --check-baseline
