@@ -593,6 +593,14 @@ class Registry:
             )
             return list(s.exec(stmt))
 
+    def delete_subscription(self, subscription_id: str) -> None:
+        with Session(self._engine) as s:
+            sub = s.get(UrlSubscription, subscription_id)
+            if sub is None:
+                raise LookupError(f"订阅不存在：{subscription_id}")
+            s.delete(sub)
+            s.commit()
+
     def set_subscription_enabled(self, subscription_id: str, enabled: bool) -> None:
         with Session(self._engine) as s:
             sub = s.get(UrlSubscription, subscription_id)

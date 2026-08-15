@@ -224,3 +224,67 @@ def test_unauthenticated_admin_route_401(tmp_path):
         resp = client.get("/admin/api/me")
         assert resp.status_code == 401
         assert resp.json()["error"]["code"] == "admin_unauthorized"
+
+
+# ---------- URL 订阅管理（docs/design/url-crawler.md 实施步骤 3） ----------
+
+
+def test_subscription_crud_contract(tmp_path):
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)
+        headers = {"X-CSRF-Token": data["csrf_token"]}
+        # 建 KB（API 通道主 Key 权限）
+        client.post(
+            "/api/v1/kb",
+            json={"name": "订阅库"},
+            headers={"Authorization": f"Bearer {API_KEY}"},
+        )
+        kb_id = client.get("/admin/api/kb").json()["data"][0]["id"]
+        # 创建订阅
+        created = client.post(
+            "/admin/api/subscriptions",
+            json={"kb_id": kb_id, "url": "https://example.com/docs", "interval_hours": 12},
+            headers=headers,
+        )
+        assert created.status_code == 201
+        sub = created.json()["data"]
+        assert sub["url"] == "https://example.com/docs"
+        assert sub["enabled"] is True
+        # 列表（按 kb 过滤）
+        listing = client.get(f"/admin/api/subscriptions?kb_id={kb_id}").json()["data"]
+        assert len(listing) == 1 and listing[0]["id"] == sub["id"]
+        # 暂停/恢复
+        paused = client.post(
+            f"/admin/api/subscriptions/{sub['id']}/toggle",
+            json={"enabled": False},
+            headers=headers,
+        )
+        assert paused.status_code == 200
+        assert client.get(f"/admin/api/subscriptions?kb_id={kb_id}").json()["data"][0][
+            "enabled"
+        ] is False
+        # 删除
+        deleted = client.delete(f"/admin/api/subscriptions/{sub['id']}", headers=headers)
+        assert deleted.status_code == 200
+        assert client.get(f"/admin/api/subscriptions?kb_id={kb_id}").json()["data"] == []
+
+
+def test_subscription_create_rejects_bad_url(tmp_path):
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)
+        client.post(
+            "/api/v1/kb",
+            json={"name": "订阅库"},
+            headers={"Authorization": f"Bearer {API_KEY}"},
+        )
+        kb_id = client.get("/admin/api/kb").json()["data"][0]["id"]
+        resp = client.post(
+            "/admin/api/subscriptions",
+            json={"kb_id": kb_id, "url": "not-a-url"},
+            headers={"X-CSRF-Token": data["csrf_token"]},
+        )
+        assert resp.status_code == 422

@@ -58,6 +58,16 @@ class KeyCreateRequest(BaseModel):
     expires_in_days: int | None = None
 
 
+class SubscriptionCreateRequest(BaseModel):
+    kb_id: str = Field(min_length=1)
+    url: str = Field(min_length=1, max_length=2048, pattern=r"^https?://")
+    interval_hours: int = Field(default=24, ge=1, le=24 * 30)
+
+
+class SubscriptionToggleRequest(BaseModel):
+    enabled: bool
+
+
 def _require_role(request: Request, role: str) -> None:
     user = request.state.admin_user
     if user is None or _ROLE_ORDER.get(user.role, 0) < _ROLE_ORDER[role]:
@@ -283,6 +293,67 @@ def search_debug(body: AnnotationRequest, request: Request, registry: RegistryDe
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
     result = request.app.state.search_service.debug_search(body.kb_id, body.query)
     return ok(result)
+
+
+# ---------- URL 订阅（docs/design/url-crawler.md 实施步骤 3；仅 admin 角色） ----------
+
+
+def _subscription_out(sub) -> dict:
+    return {
+        "id": sub.id,
+        "kb_id": sub.kb_id,
+        "url": sub.url,
+        "interval_hours": sub.interval_hours,
+        "enabled": sub.enabled,
+        "last_content_hash": sub.last_content_hash,
+        "last_fetched_at": sub.last_fetched_at.isoformat() if sub.last_fetched_at else None,
+        "next_fetch_at": sub.next_fetch_at.isoformat() if sub.next_fetch_at else None,
+        "last_error": sub.last_error,
+    }
+
+
+@router.post("/subscriptions", response_model=Envelope[dict], status_code=201)
+def create_subscription(
+    body: SubscriptionCreateRequest, request: Request, registry: RegistryDep
+):
+    _require_role(request, "admin")
+    if registry.get_kb(body.kb_id) is None:
+        raise_http(404, KB_NOT_FOUND, "知识库不存在")
+    # URL 抓取的安全防护在 fetch 时执行（SSRF 5 层）；创建只做格式校验（schema pattern）
+    sub = registry.create_subscription(body.kb_id, body.url, body.interval_hours)
+    registry.record_audit(
+        actor=f"admin:{request.state.admin_user.username}",
+        action="key_manage",
+        kb_id=body.kb_id,
+        ip=_client_ip(request),
+    )
+    return ok(_subscription_out(sub))
+
+
+@router.get("/subscriptions", response_model=Envelope[list[dict]])
+def list_subscriptions(registry: RegistryDep, kb_id: str | None = None):
+    return ok([_subscription_out(s) for s in registry.list_subscriptions(kb_id=kb_id)])
+
+
+@router.post("/subscriptions/{sub_id}/toggle", response_model=Envelope[dict])
+def toggle_subscription(
+    sub_id: str, body: SubscriptionToggleRequest, request: Request, registry: RegistryDep
+):
+    _require_role(request, "admin")
+    if registry.get_subscription(sub_id) is None:
+        raise_http(404, "subscription_not_found", "订阅不存在")
+    registry.set_subscription_enabled(sub_id, body.enabled)
+    return ok(_subscription_out(registry.get_subscription(sub_id)))
+
+
+@router.delete("/subscriptions/{sub_id}", response_model=Envelope[dict])
+def delete_subscription(sub_id: str, request: Request, registry: RegistryDep):
+    _require_role(request, "admin")
+    sub = registry.get_subscription(sub_id)
+    if sub is None:
+        raise_http(404, "subscription_not_found", "订阅不存在")
+    registry.delete_subscription(sub_id)
+    return ok({"deleted": True})
 
 
 def _client_ip(request: Request) -> str:
