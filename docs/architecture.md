@@ -10,7 +10,7 @@
 | 维度 | 目标 |
 |---|---|
 | 服务定位 | 本地部署的 **RAG 基础设施**，非应用：向上对 Agent / 应用暴露检索与生成能力，不绑定具体业务 |
-| 接入方式 | MCP 协议（**已实现**：stdio + streamable HTTP 双 transport，5 工具）+ OpenAI 兼容 REST + Web 管理端（Phase 4） |
+| 接入方式 | MCP 协议（**v1.0 已实现**：stdio transport 5 工具；streamable HTTP 为 v1.1 功能项，见 ADR-006）+ OpenAI 兼容 REST + Web 管理端（Phase 4） |
 | 规模 | 十万级文档 / 千万级 chunk，单机承载，预留横向扩展路径 |
 | 核心能力 | 多格式解析（PDF/Office/代码/网页）、中英混合检索、混合检索+重排、RAG 生成、增量更新、评估闭环 |
 | 非目标 | 不追求多模态生成、不内置业务工作流、不替代 Dify 类应用平台 |
@@ -99,7 +99,7 @@ flowchart TB
 | 网页采集 | httpx + Playwright + Readability | 正文提取、sitemap、增量更新 |
 | 文件存储 | MinIO | S3 兼容，本地对象存储 |
 | 元数据 | PostgreSQL 16 | 文档/知识库/任务状态/会话/API Key |
-| MCP | 官方 `mcp` Python SDK | stdio（本地）+ streamable HTTP（远程）双 transport |
+| MCP | 官方 `mcp` Python SDK | stdio（v1.0）；streamable HTTP（v1.1，ADR-006 前置条件） |
 | Web 前端 | Vue 3 + TypeScript + Pinia + Element Plus | 内部管理端，开发效率优先 |
 | 可观测 | Prometheus + Grafana + structlog | 指标、链路、结构化日志 |
 | 评估 | RAGAS + DeepEval | 忠实度/相关度/上下文精度回归 |
