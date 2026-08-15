@@ -42,3 +42,11 @@ apps/.e2e-data/
 apps/web/e2e/.auth/
 apps/web/test-results/
 apps/web/playwright-report/
+
+# 评测/演练运行产物（安全审计 L-7：批次明细与标记文件不入库；
+# 保留 ragas-eval-*-full.jsonl 与 baseline 提交）
+docs/perf/ragas-eval-[0-9]*-*.json
+docs/perf/ragas-eval-[0-9]*-*.jsonl
+docs/perf/.judge-v2-marker
+.qdrant-initialized
+control/
