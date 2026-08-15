@@ -36,6 +36,24 @@ def _login(client, password=INITIAL_PW):
     return resp.json()["data"]
 
 
+def _login_admin(client, username="admin", password=INITIAL_PW):
+    """登录并完成强制改密（安全审计 H-1 契约后的统一入口）。"""
+    resp = client.post("/admin/api/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    if not data["must_change_password"]:
+        return data
+    changed = client.post(
+        "/admin/api/change-password",
+        json={"current_password": password, "new_password": "new-secure-pass-1"},
+        headers={"X-CSRF-Token": data["csrf_token"]},
+    )
+    assert changed.status_code == 200, changed.text
+    return client.post(
+        "/admin/api/login", json={"username": username, "password": "new-secure-pass-1"}
+    ).json()["data"]
+
+
 def test_login_flow_and_cookie_attributes(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:
@@ -138,9 +156,7 @@ def test_readonly_role_cannot_manage_keys(tmp_path):
         app.state.registry.ensure_admin_user(
             "viewer", hash_password("viewer-pass"), role="readonly"
         )
-        data = client.post(
-            "/admin/api/login", json={"username": "viewer", "password": "viewer-pass"}
-        ).json()["data"]
+        data = _login_admin(client, "viewer", "viewer-pass")
         assert data["role"] == "readonly"
         resp = client.post(
             "/admin/api/keys",
@@ -153,11 +169,35 @@ def test_readonly_role_cannot_manage_keys(tmp_path):
         assert client.get("/admin/api/kb").status_code == 200
 
 
+def test_readonly_role_rbac_matrix(tmp_path):
+    # 安全审计 H-4：readonly 无任何变更/敏感读操作（web-admin-auth.md §2 契约）
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        app.state.registry.ensure_admin_user(
+            "viewer", hash_password("viewer-pass"), role="readonly"
+        )
+        data = _login_admin(client, "viewer", "viewer-pass")
+        headers = {"X-CSRF-Token": data["csrf_token"]}
+        # 标注写入 → 403
+        ann = client.post(
+            "/admin/api/annotations",
+            json={"kb_id": "x", "query": "越权标注"},
+            headers=headers,
+        )
+        assert ann.status_code == 403
+        # Key 枚举（敏感元数据）→ 403
+        keys = client.get("/admin/api/keys")
+        assert keys.status_code == 403
+        # 标注列表（含用户查询原文）→ 403
+        anns = client.get("/admin/api/annotations?kb_id=x")
+        assert anns.status_code == 403
+
+
 def test_admin_can_issue_and_revoke_key(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:
         _set_initial_password(app)
-        data = _login(client)
+        data = _login_admin(client)
         issued = client.post(
             "/admin/api/keys",
             json={"name": "agent-key", "kb_acl": ["*"]},
@@ -184,7 +224,7 @@ def test_annotation_idempotent_upsert(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:
         _set_initial_password(app)
-        data = _login(client)
+        data = _login_admin(client)
         # 建 KB（API 通道主 Key 权限；admin 通道只读列表）
         client.post(
             "/api/v1/kb",
@@ -229,11 +269,75 @@ def test_unauthenticated_admin_route_401(tmp_path):
 # ---------- URL 订阅管理（docs/design/url-crawler.md 实施步骤 3） ----------
 
 
+def test_server_side_forced_password_change(tmp_path):
+    # 安全审计 H-1：服务端强制首次改密（非仅前端契约）
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)  # must_change_password=True
+        headers = {"X-CSRF-Token": data["csrf_token"]}
+        # 改密前：业务端点全部 403
+        kb = client.get("/admin/api/kb")
+        assert kb.status_code == 403
+        assert kb.json()["error"]["code"] == "password_change_required"
+        # 改密端点本身可用
+        changed = client.post(
+            "/admin/api/change-password",
+            json={"current_password": INITIAL_PW, "new_password": "new-secure-pass-1"},
+            headers=headers,
+        )
+        assert changed.status_code == 200
+        # 改密后业务端点放行 + 初始密码文件已删除
+        assert client.get("/admin/api/kb").status_code == 200
+        initial_file = app.state.settings.data_dir / "admin_initial_password"
+        assert not initial_file.exists()
+
+
+def test_login_failure_is_audited(tmp_path):
+    # 安全审计 H-2：登录失败入审计（爆破检测信号）
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        resp = client.post(
+            "/admin/api/login", json={"username": "admin", "password": "wrong-pass"}
+        )
+        assert resp.status_code == 401
+        entries = app.state.registry.list_audit()  # 未认证状态下直接查 registry
+        assert any(e.action == "login_failed" and "user:admin" in e.actor for e in entries)
+
+
+def test_audit_action_codes_are_distinct(tmp_path):
+    # 安全审计 H-3：登录/登出/改密/Key 签发吊销使用独立动作码
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)  # login 审计
+        headers = {"X-CSRF-Token": data["csrf_token"]}
+        client.post(
+            "/admin/api/change-password",
+            json={"current_password": INITIAL_PW, "new_password": "new-secure-pass-1"},
+            headers=headers,
+        )  # password_change
+        issued = client.post(
+            "/admin/api/keys", json={"name": "k1"}, headers=headers
+        ).json()["data"]  # key_create
+        client.delete(f"/admin/api/keys/{issued['id']}", headers=headers)  # key_revoke
+        client.post("/admin/api/logout", headers=headers)  # logout
+        actions = {e.action for e in app.state.registry.list_audit()}
+        assert {
+            "login",
+            "password_change",
+            "key_create",
+            "key_revoke",
+            "logout",
+        } <= actions
+
+
 def test_subscription_crud_contract(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:
         _set_initial_password(app)
-        data = _login(client)
+        data = _login_admin(client)
         headers = {"X-CSRF-Token": data["csrf_token"]}
         # 建 KB（API 通道主 Key 权限）
         client.post(
@@ -275,7 +379,7 @@ def test_subscription_create_rejects_bad_url(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:
         _set_initial_password(app)
-        data = _login(client)
+        data = _login_admin(client)
         client.post(
             "/api/v1/kb",
             json={"name": "订阅库"},

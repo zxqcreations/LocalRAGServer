@@ -107,12 +107,12 @@ def login(
     expiry = session_expiry()
     registry.create_admin_session(user.id, hash_session(session_id), expiry, csrf_token)
     _session_cookie(request, session_id, expiry)
-    registry.record_audit(
-            actor=f"admin:{user.username}",
-            action="key_manage",
-            kb_id="",
-            ip=_client_ip(request),
-        )
+    registry.record_audit(  # 安全审计 H-3：独立动作码
+        actor=f"admin:{user.username}",
+        action="login",
+        kb_id="",
+        ip=_client_ip(request),
+    )
     return ok(
         {
             "username": user.username,
@@ -128,22 +128,32 @@ def change_password(
     body: ChangePasswordRequest,
     request: Request,
     registry: RegistryDep,
+    settings: SettingsDep,
 ):
     user = request.state.admin_user
     if not verify_password(body.current_password, user.password_hash):
         raise_http(401, "admin_login_failed", "当前密码错误")
     registry.set_admin_password(user.id, hash_password(body.new_password))
-    registry.record_audit(
-            actor=f"admin:{user.username}",
-            action="key_manage",
-            kb_id="",
-            ip=_client_ip(request),
-        )
+    # 安全审计 H-1：改密成功后删除初始密码明文文件（一次性凭据即用即焚）
+    (settings.data_dir / "admin_initial_password").unlink(missing_ok=True)
+    registry.record_audit(  # 安全审计 H-3：独立动作码
+        actor=f"admin:{user.username}",
+        action="password_change",
+        kb_id="",
+        ip=_client_ip(request),
+    )
     return ok({"changed": True})
 
 
 @router.post("/logout", response_model=Envelope[dict])
 def logout(request: Request, registry: RegistryDep):
+    # 安全审计 H-3：登出入审计（web-admin-auth.md §3 契约）
+    registry.record_audit(
+        actor=f"admin:{request.state.admin_user.username}",
+        action="logout",
+        kb_id="",
+        ip=_client_ip(request),
+    )
     registry.revoke_admin_session(request.state.admin_session_hash)
     request.state.clear_session_cookie = True
     return ok({"logged_out": True})
@@ -204,17 +214,19 @@ def create_key(body: KeyCreateRequest, request: Request, registry: RegistryDep):
     if body.expires_in_days is not None:
         expiry = datetime.now(UTC) + _td(days=body.expires_in_days)
     record, raw = registry.create_api_key(body.name, body.kb_acl, expires_at=expiry)
-    registry.record_audit(
-            actor=f"admin:{user.username}",
-            action="key_manage",
-            kb_id="",
-            ip=_client_ip(request),
-        )
+    registry.record_audit(  # 安全审计 H-3：独立动作码
+        actor=f"admin:{user.username}",
+        action="key_create",
+        kb_id="",
+        ip=_client_ip(request),
+    )
     return ok({"id": record.id, "name": record.name, "api_key": raw})  # 明文仅此一次
 
 
 @router.get("/keys", response_model=Envelope[list[dict]])
-def list_keys(registry: RegistryDep):
+def list_keys(request: Request, registry: RegistryDep):
+    # 安全审计 H-4：Key 元数据（名称/ACL/使用时间）属敏感面，readonly 不可枚举
+    _require_role(request, "admin")
     keys = registry.list_api_keys()
     return ok(
         [
@@ -237,12 +249,12 @@ def revoke_key(key_id: str, request: Request, registry: RegistryDep):
     if registry.get_api_key(key_id) is None:
         raise_http(404, "key_not_found", "API Key 不存在")
     registry.revoke_api_key(key_id)
-    registry.record_audit(
-            actor=f"admin:{user.username}",
-            action="key_manage",
-            kb_id="",
-            ip=_client_ip(request),
-        )
+    registry.record_audit(  # 安全审计 H-3：独立动作码
+        actor=f"admin:{user.username}",
+        action="key_revoke",
+        kb_id="",
+        ip=_client_ip(request),
+    )
     return ok({"revoked": True})
 
 
@@ -250,6 +262,8 @@ def revoke_key(key_id: str, request: Request, registry: RegistryDep):
 def create_annotation(
     body: AnnotationRequest, request: Request, registry: RegistryDep
 ):
+    # 安全审计 H-4：readonly 无任何变更操作（web-admin-auth.md §2）
+    _require_role(request, "admin")
     # 审计 F17 契约：幂等覆盖（同 doc+query 重复标注覆盖而非追加）+ kb_acl 校验
     require_kb_access(body.kb_id, "*")  # 管理端全 KB 权限语义
     if registry.get_kb(body.kb_id) is None:
@@ -267,7 +281,9 @@ def create_annotation(
 
 
 @router.get("/annotations", response_model=Envelope[list[dict]])
-def list_annotations(registry: RegistryDep, kb_id: str, limit: int = 200):
+def list_annotations(request: Request, registry: RegistryDep, kb_id: str, limit: int = 200):
+    # 安全审计 H-4：标注含用户原始查询，readonly 不可读
+    _require_role(request, "admin")
     if registry.get_kb(kb_id) is None:
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
     return ok(
@@ -321,9 +337,9 @@ def create_subscription(
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
     # URL 抓取的安全防护在 fetch 时执行（SSRF 5 层）；创建只做格式校验（schema pattern）
     sub = registry.create_subscription(body.kb_id, body.url, body.interval_hours)
-    registry.record_audit(
+    registry.record_audit(  # 安全审计 H-3：独立动作码
         actor=f"admin:{request.state.admin_user.username}",
-        action="key_manage",
+        action="subscription_create",
         kb_id=body.kb_id,
         ip=_client_ip(request),
     )

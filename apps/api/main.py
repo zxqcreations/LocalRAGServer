@@ -224,6 +224,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 2) api_keys 表 Key：scrypt 验证 + ACL 解析（F-13 强制点）
         record = app.state.registry.verify_api_key(raw_key)
         if record is None:
+            # 安全审计 H-2：认证失败事件（不落 Key 明文，detail 仅失败原因）
+            _logger.warning("auth_failed", detail=f"invalid_api_key ip:{ip}")
             return JSONResponse(status_code=401, content=err(AUTH_INVALID, "API Key 无效"))
         request.state.allowed_kbs = resolve_allowed_kb_ids(json.loads(record.kb_acl))
         request.state.api_key_record = record
@@ -277,9 +279,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if getattr(request.state, "admin_user", None) is None:
             if request.url.path.endswith("/login"):
                 # 登录端点本身免会话，但仍需 Cookie 下发后处理
-                return _apply_session_cookie(await call_next(request), request)
+                response = _apply_session_cookie(await call_next(request), request)
+                # 安全审计 H-2：登录失败入审计（爆破检测信号；不记密码/明文凭据）
+                failed_user = getattr(request.state, "login_failed", None)
+                if failed_user:
+                    app.state.registry.record_audit(
+                        actor=f"user:{failed_user}",
+                        action="login_failed",
+                        kb_id="",
+                        ip=request.client.host if request.client else "",
+                    )
+                return response
             return JSONResponse(
                 status_code=401, content=err("admin_unauthorized", "请先登录管理端")
+            )
+        # 安全审计 H-1：服务端强制首次改密（仅放行改密相关端点，前端契约之外的第二道闸）
+        if request.state.admin_user.must_change_password and not request.url.path.endswith(
+            ("/login", "/change-password", "/me", "/logout")
+        ):
+            return JSONResponse(
+                status_code=403,
+                content=err("password_change_required", "首次登录须先修改密码"),
             )
         # CSRF：状态变更请求校验 token（登录响应下发 csrf_token，前端以 X-CSRF-Token 头回传）
         if request.method in {"POST", "PUT", "DELETE"} and not request.url.path.endswith("/login"):
