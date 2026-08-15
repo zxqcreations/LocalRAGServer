@@ -8,7 +8,7 @@
 """
 import argparse
 import json
-import subprocess
+import subprocess  # nosec B404 -- 仅启动仓库内 llama-server/uv（固定 argv，无外部输入）
 import sys
 import time
 import urllib.request
@@ -28,7 +28,9 @@ if not MARKER.exists():
 
 def _healthy(port: int) -> bool:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as r:
+        with urllib.request.urlopen(  # nosec B310 -- 仅本机 127.0.0.1 健康探测（固定地址）
+            f"http://127.0.0.1:{port}/health", timeout=3
+        ) as r:
             return r.status == 200
     except OSError:
         return False
@@ -126,7 +128,7 @@ def main() -> int:
                 "RAGAS_JUDGE_MODEL": "qwen2.5-7b-instruct",
             }
             print(f"批次：offset={done} limit={batch_end - done}")
-            result = subprocess.run(  # nosec B603 -- 仓库内固定 argv
+            result = subprocess.run(  # nosec B603 B607 -- uv 在 PATH 内 + argv 全为仓库常量
                 ["uv", "run", "python", "-m", "eval.ragas_runner", "--offset", str(done),
                  "--limit", str(batch_end - done), "--skip-errors"],
                 cwd=ROOT, env=env,

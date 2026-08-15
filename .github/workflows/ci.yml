@@ -27,6 +27,9 @@ jobs:
         run: uv run pyright core apps scripts eval
       - name: bandit
         run: uv run bandit -r core apps scripts -q
+        env:
+          # Windows runner 控制台 cp1252 写中文报告崩溃（实测）——统一 UTF-8 输出
+          PYTHONUTF8: "1"
       - name: pip-audit
         run: uv run pip-audit
       - name: pytest + 覆盖率门禁（≥80%）
