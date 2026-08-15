@@ -31,7 +31,7 @@ GenerateFn = Callable[[str, list[str]], str]  # (question, contexts) -> answer
 # （build_judge 前 check_ragas_deps 已拦截，占位类不会被实际使用）。
 # TYPE_CHECKING 分支供 pyright 解析真类型，else 为运行时兜底（标准懒依赖模式）。
 if TYPE_CHECKING:
-    from langchain_core.embeddings import Embeddings
+    from langchain_core.embeddings import Embeddings  # type: ignore[import-not-found]
 else:  # pragma: no cover - 运行时兜底
     try:
         from langchain_core.embeddings import Embeddings
@@ -157,7 +157,7 @@ class _LocalEmbeddings(Embeddings):
     """
 
     def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
         self._model = SentenceTransformer(model_name)
 
