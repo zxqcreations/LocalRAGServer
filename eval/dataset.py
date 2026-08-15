@@ -19,6 +19,7 @@ DATASET_PATH = EVAL_DIR / "datasets" / "qa.jsonl"
 KB_TYPES = {"document", "code", "web"}
 MIN_ENTRIES = 50  # 审计 F9：Day 1 种子 ≥50 条
 MAX_ANCHOR_LEN = 40  # 锚点必须落在单个 chunk 内（分块尺寸 150 起，留足余量）
+DATASET_VERSION = "v1"  # 评测集版本（quality.md Phase 5：跨版本结果不可比，报告/基线须携带）
 
 
 class QAEntry(BaseModel):

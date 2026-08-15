@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from eval.dataset import QAEntry
+from eval.dataset import DATASET_VERSION, QAEntry
 
 EVAL_DIR = Path(__file__).resolve().parent
 REPORT_ROOT = EVAL_DIR.parent / "docs" / "perf"
@@ -133,7 +133,15 @@ def write_report(records: list[EvalRecord], summary: dict[str, float], path: Pat
 def check_baseline(
     summary: dict[str, float], baseline: dict[str, float], tolerance: float = TOLERANCE
 ) -> list[str]:
-    """对照基线：任一指标低于 (基线 - 容差) 即失败，返回失败项说明。"""
+    """对照基线：任一指标低于 (基线 - 容差) 即失败，返回失败项说明。
+
+    评测集版本不匹配视为不可比（quality.md Phase 5：跨版本结果不可比）。
+    """
+    baseline_version = baseline.get("dataset_version")
+    if baseline_version != DATASET_VERSION:
+        return [
+            f"评测集版本不匹配：基线 {baseline_version} != 当前 {DATASET_VERSION}（不可比）"
+        ]
     failures = []
     for metric in METRICS:
         floor = baseline.get(metric, 0.0) - tolerance

@@ -14,7 +14,7 @@ from core.retrieval.embeddings import StubEmbedder
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
 from core.storage.vector import InMemoryVectorStore
-from eval.dataset import FIXTURES_ROOT, KB_TYPES, load_qa, validate_dataset
+from eval.dataset import DATASET_VERSION, FIXTURES_ROOT, KB_TYPES, load_qa, validate_dataset
 
 
 def evaluate(top_k: int = 10, dim: int = 1024, chunk_size: int = 150) -> dict:
@@ -85,10 +85,19 @@ BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
 
 
 def check_baseline(metrics: dict, tolerance: float | None = None) -> tuple[bool, str]:
-    """基线回归检查（Phase 2 CI 门禁：指标低于基线减容差即失败）。"""
+    """基线回归检查（Phase 2 CI 门禁：指标低于基线减容差即失败）。
+
+    评测集版本不匹配视为不可比（quality.md Phase 5：跨版本结果不可比）。
+    """
     import json
 
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    baseline_version = baseline.get("dataset_version")
+    if baseline_version != DATASET_VERSION:
+        return (
+            False,
+            f"评测集版本不匹配：基线 {baseline_version} != 当前 {DATASET_VERSION}（不可比）",
+        )
     tol = tolerance if tolerance is not None else baseline.get("tolerance", 0.05)
     problems = []
     for key in ("recall@10", "mrr@10"):
@@ -118,7 +127,7 @@ def main() -> int:
         )
     print(
         f"[总体     ] recall@{top_k}={metrics[f'recall@{top_k}']:.3f} "
-        f"mrr@{top_k}={metrics[f'mrr@{top_k}']:.3f}"
+        f"mrr@{top_k}={metrics[f'mrr@{top_k}']:.3f}（评测集 {DATASET_VERSION}）"
     )
     if args.check_baseline:
         ok, message = check_baseline(metrics)

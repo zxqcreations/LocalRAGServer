@@ -137,15 +137,27 @@ def _metrics(faithfulness: float) -> dict[str, float]:
     }
 
 
+def _baseline(faithfulness: float) -> dict[str, float]:
+    return {**_metrics(faithfulness), "dataset_version": "v1"}
+
+
 def test_check_baseline_passes_within_tolerance():
-    assert check_baseline(_metrics(0.61), _metrics(0.6)) == []
+    assert check_baseline(_metrics(0.61), _baseline(0.6)) == []
 
 
 def test_check_baseline_fails_below_tolerance():
-    failures = check_baseline(_metrics(0.5), _metrics(0.6))
+    failures = check_baseline(_metrics(0.5), _baseline(0.6))
     assert len(failures) == 1
     assert "faithfulness" in failures[0]
     assert str(TOLERANCE) in failures[0]
+
+
+def test_check_baseline_rejects_version_mismatch():
+    # quality.md Phase 5：跨版本结果不可比
+    stale = {**_metrics(0.9), "dataset_version": "v0"}
+    failures = check_baseline(_metrics(0.9), stale)
+    assert len(failures) == 1
+    assert "版本不匹配" in failures[0]
 
 
 def test_check_ragas_deps_reports_missing(monkeypatch):
