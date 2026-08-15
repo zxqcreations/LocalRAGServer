@@ -49,42 +49,66 @@ class ChatClient:
         )
         self._model = model
 
-    def chat(self, messages: list[dict]) -> ChatResult:
-        # structlog-integration.md D2：LLM 调用事件（消息体不落日志）
-        started = time.perf_counter()
-        resp = self._client.post(
-            "/v1/chat/completions",
-            json={"model": self._model, "messages": messages, "stream": False},
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"] or ""
+    def _emit_call(self, started: float, aborted: bool) -> None:
+        # structlog-integration.md D2：LLM 调用事件（消息体不落日志）；
+        # aborted 标记客户端断开/流异常导致的提前终止（审查 H2）
         _logger.info(
-            "llm_call", model=self._model, duration_ms=(time.perf_counter() - started) * 1000
+            "llm_call",
+            model=self._model,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            aborted=aborted,
         )
+
+    def chat(self, messages: list[dict]) -> ChatResult:
+        started = time.perf_counter()
+        try:
+            resp = self._client.post(
+                "/v1/chat/completions",
+                json={"model": self._model, "messages": messages, "stream": False},
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"] or ""
+        except Exception:
+            # 失败也有事件（审查 H2：LLM 故障不得在日志中静默）
+            _logger.exception(
+                "llm_call_error",
+                model=self._model,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
+        self._emit_call(started, aborted=False)
         return ChatResult(content=content)
 
     def chat_stream(self, messages: list[dict]) -> Iterator[str]:
         """逐 token 产出内容（SSE）。"""
         started = time.perf_counter()
-        with self._client.stream(
-            "POST",
-            "/v1/chat/completions",
-            json={"model": self._model, "messages": messages, "stream": True},
-        ) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:") :].strip()
-                if payload == "[DONE]":
-                    break
-                chunk = json.loads(payload)
-                piece = (chunk["choices"][0].get("delta") or {}).get("content")
-                if piece:
-                    yield piece
-        _logger.info(
-            "llm_call", model=self._model, duration_ms=(time.perf_counter() - started) * 1000
-        )
+        aborted = False
+        try:
+            with self._client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={"model": self._model, "messages": messages, "stream": True},
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:") :].strip()
+                    if payload == "[DONE]":
+                        break
+                    chunk = json.loads(payload)
+                    piece = (chunk["choices"][0].get("delta") or {}).get("content")
+                    if piece:
+                        yield piece
+        except GeneratorExit:
+            # 消费者提前关闭（客户端断连）——事件照发（审查 H2）
+            aborted = True
+            raise
+        except Exception:
+            aborted = True
+            raise
+        finally:
+            self._emit_call(started, aborted=aborted)
 
     @property
     def client(self) -> httpx.Client:

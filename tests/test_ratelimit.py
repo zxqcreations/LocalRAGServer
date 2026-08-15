@@ -56,3 +56,23 @@ def test_fail_open_limiter_swallows_errors():
 
     limiter = FailOpenLimiter(BoomLimiter())
     assert limiter.allow("k", 1, 1.0) is True  # fail-open 放行
+
+
+def test_fail_open_event_carries_exception(capsys):
+    # 审查 H1：fail-open 事件必须携带异常诊断（ExceptionRenderer 产物）
+    import json
+
+    class BoomLimiter:
+        def allow(self, key, capacity, refill_per_s):
+            raise RuntimeError("限流组件故障")
+
+    limiter = FailOpenLimiter(BoomLimiter())
+    assert limiter.allow("k", 1, 1.0) is True
+    out = capsys.readouterr().out
+    events = [
+        json.loads(line)
+        for line in out.splitlines()
+        if line.startswith("{") and "rate_limiter_fail_open" in line
+    ]
+    assert events, "未捕获到 rate_limiter_fail_open 事件"
+    assert "限流组件故障" in events[-1].get("exception", "")

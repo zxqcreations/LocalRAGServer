@@ -89,44 +89,61 @@ def _bind_job_trace(job_id: str) -> None:
     structlog.contextvars.bind_contextvars(trace_id=job_id)
 
 
+def _clear_job_trace() -> None:
+    """任务结束清理（审查 L1）：防 worker 线程残留过期 trace 串扰后续任务/日志。"""
+    structlog.contextvars.clear_contextvars()
+
+
 @app.task(bind=True, name="ingest.parse", max_retries=MAX_ATTEMPTS)
 def parse_task(self, job_id: str):
     _bind_job_trace(job_id)
-    pipeline = _pipeline()
     try:
-        pipeline.parse_stage(job_id)
-    except Exception as exc:
-        _handle_failure(self, job_id, pipeline, exc)
+        pipeline = _pipeline()
+        try:
+            pipeline.parse_stage(job_id)
+        except Exception as exc:
+            _handle_failure(self, job_id, pipeline, exc)
+    finally:
+        _clear_job_trace()
 
 
 @app.task(bind=True, name="ingest.chunk", max_retries=MAX_ATTEMPTS)
 def chunk_task(self, job_id: str):
     _bind_job_trace(job_id)
-    pipeline = _pipeline()
     try:
-        pipeline.chunk_stage(job_id)
-    except Exception as exc:
-        _handle_failure(self, job_id, pipeline, exc)
+        pipeline = _pipeline()
+        try:
+            pipeline.chunk_stage(job_id)
+        except Exception as exc:
+            _handle_failure(self, job_id, pipeline, exc)
+    finally:
+        _clear_job_trace()
 
 
 @app.task(bind=True, name="ingest.embed", max_retries=MAX_ATTEMPTS)
 def embed_task(self, job_id: str):
     _bind_job_trace(job_id)
-    pipeline = _pipeline()
     try:
-        pipeline.embed_stage(job_id)
-    except Exception as exc:
-        _handle_failure(self, job_id, pipeline, exc)
+        pipeline = _pipeline()
+        try:
+            pipeline.embed_stage(job_id)
+        except Exception as exc:
+            _handle_failure(self, job_id, pipeline, exc)
+    finally:
+        _clear_job_trace()
 
 
 @app.task(bind=True, name="ingest.index", max_retries=MAX_ATTEMPTS)
 def index_task(self, job_id: str):
     _bind_job_trace(job_id)
-    pipeline = _pipeline()
     try:
-        pipeline.index_stage(job_id)
-    except Exception as exc:
-        _handle_failure(self, job_id, pipeline, exc)
+        pipeline = _pipeline()
+        try:
+            pipeline.index_stage(job_id)
+        except Exception as exc:
+            _handle_failure(self, job_id, pipeline, exc)
+    finally:
+        _clear_job_trace()
 
 
 def enqueue_ingest(job_id: str):

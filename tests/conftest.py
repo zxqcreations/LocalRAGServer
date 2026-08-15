@@ -135,3 +135,17 @@ def block_external_http(respx_mock):
         side_effect=RuntimeError("测试中禁止访问外部网络（审计 F13 护栏）")
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def configure_structlog():
+    """每个用例统一重配 structlog 指向当前捕获流（审查 L2）。
+
+    structlog.configure 是进程级全局配置；app lifespan 内的 configure_logging
+    与之一致（同源同参数），此 fixture 保证无 lifespan 的用例（任务/管线测试）
+    的事件也落在当前用例的捕获缓冲区，避免写向已失效的历史捕获流。
+    """
+    from core.observability.logging import configure_logging
+
+    configure_logging()
+    yield

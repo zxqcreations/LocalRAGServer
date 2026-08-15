@@ -1,6 +1,5 @@
 """FastAPI 应用工厂、生命周期、认证中间件与统一异常信封。"""
 import json
-import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -24,7 +23,7 @@ from apps.api.routes.admin import COOKIE_NAME
 from apps.api.schemas import err
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
-from core.observability.logging import configure_logging, emit_alert
+from core.observability.logging import configure_logging, emit_alert, get_logger
 from core.observability.metrics import MetricsCollector
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
@@ -35,7 +34,7 @@ from core.security.ratelimit import build_limiter
 from core.storage.registry import Registry
 from core.storage.vector import QdrantVectorStore
 
-logger = logging.getLogger("local_rag_server")
+_logger = get_logger("local_rag_server.api")
 
 # 无需认证的路径（健康检查/探针与 API 文档）
 _PUBLIC_PATHS = {"/health", "/healthz", "/readyz", "/docs", "/openapi.json", "/redoc"}
@@ -54,10 +53,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise RuntimeError("database_url 未配置（应由 data_dir 派生）")
         if settings.host not in _LOOPBACK_HOSTS:
             # 审计 F-01：对外暴露需显式确认，启动时打印安全警告
-            logger.warning(
-                "安全警告：服务绑定 %s（非回环地址）。确认已配置 TLS 与 API Key（当前：%s）",
-                settings.host,
-                "已配置" if settings.api_key else "未配置（fail-closed）",
+            _logger.warning(
+                "non_loopback_bind",
+                detail=(
+                    f"服务绑定 {settings.host}（非回环地址）。"
+                    f"API Key：{'已配置' if settings.api_key else '未配置（fail-closed）'}"
+                ),
             )
         app.state.registry = Registry(settings.database_url)
         app.state.limiter = build_limiter()
@@ -69,7 +70,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         initial_file = settings.data_dir / "admin_initial_password"
         if not initial_file.exists():
             initial_file.write_text(initial_pw, encoding="utf-8")
-            logger.warning("初始管理密码已生成：%s（首次登录后强制修改）", initial_pw)
+            _logger.warning(
+                "initial_password_generated", detail="初始管理密码已生成（首次登录后强制修改）"
+            )
         embedder = build_embedder(settings)
         app.state.vector_store = QdrantVectorStore(
             url=settings.qdrant_url,
@@ -178,30 +181,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    # ---- trace_id 中间件（observability.md §2：贯穿检索/重排/生成链路） ----
-
-    @app.middleware("http")
-    async def trace_middleware(request: Request, call_next):
-        # 仅 API 路径追踪（健康/探针/文档不生成 trace，observability.md §2）
-        if not request.url.path.startswith(("/api/", "/v1/")):
-            return await call_next(request)
-        request.state.trace_id = uuid.uuid4().hex[:16]
-        request.state.started_at = time.perf_counter()
-        # structlog-integration.md D1：trace_id 进入日志上下文（contextvars 随调用链传播，
-        # 检索/重排/生成同步路径自动携带；请求结束清除防串扰）
-        structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(trace_id=request.state.trace_id)
-        try:
-            response = await call_next(request)
-        finally:
-            structlog.contextvars.clear_contextvars()
-        response.headers["X-Trace-Id"] = request.state.trace_id
-        app.state.metrics.incr("api.requests")
-        if response.status_code >= 400:
-            app.state.metrics.incr("api.errors")
-            app.state.metrics.incr(f"api.status.{response.status_code}")
-        return response
-
     # ---- 管理端会话认证（web-admin-auth.md：与 API Key 通道彻底隔离） ----
 
     # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
@@ -228,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 认证前 per-IP 限流（审计 M-2：防 scrypt 计算放大 DoS 与失败尝试爆破）
         ip = request.client.host if request.client else "unknown"
         if not app.state.limiter.allow(f"ip:{ip}", 30, 0.5):
+            _logger.warning("rate_limited", actor=f"ip:{ip}", limit="30/0.5s")
             return JSONResponse(
                 status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
             )
@@ -236,6 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.state.allowed_kbs = "*"
             request.state.actor = "master"
             if not app.state.limiter.allow("key:master", 120, 2.0):
+                _logger.warning("rate_limited", actor="key:master", limit="120/2s")
                 return JSONResponse(
                     status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
                 )
@@ -248,6 +229,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.api_key_record = record
         request.state.actor = record.id
         if not app.state.limiter.allow(f"key:{record.id}", 120, 2.0):
+            _logger.warning("rate_limited", actor=f"key:{record.id}", limit="120/2s")
             return JSONResponse(
                 status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
             )
@@ -310,6 +292,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         return _apply_session_cookie(await call_next(request), request)
 
+    # ---- trace_id 中间件（observability.md §2：贯穿检索/重排/生成链路） ----
+    # 注册在最外层（审查 M1）：auth/admin 拒绝路径（401/429/403）同样带 trace，
+    # 限流与认证失败事件才有关联标识——滥用检测信号最需要 trace 的路径
+
+    @app.middleware("http")
+    async def trace_middleware(request: Request, call_next):
+        # 仅 API 路径追踪（健康/探针/文档不生成 trace，observability.md §2）
+        if not request.url.path.startswith(("/api/", "/v1/")):
+            return await call_next(request)
+        request.state.trace_id = uuid.uuid4().hex[:16]
+        request.state.started_at = time.perf_counter()
+        # structlog-integration.md D1：trace_id 进入日志上下文（contextvars 随调用链传播，
+        # 检索/重排/生成同步路径自动携带；请求结束清除防串扰）
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(trace_id=request.state.trace_id)
+        try:
+            response = await call_next(request)
+        finally:
+            structlog.contextvars.clear_contextvars()
+        response.headers["X-Trace-Id"] = request.state.trace_id
+        app.state.metrics.incr("api.requests")
+        if response.status_code >= 400:
+            app.state.metrics.incr("api.errors")
+            app.state.metrics.incr(f"api.status.{response.status_code}")
+        return response
+
     # ---- 统一异常信封 ----
 
     @app.exception_handler(HTTPException)
@@ -336,8 +344,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _unhandled_exc(request: Request, exc: Exception):
-        # 不向客户端泄露内部细节，完整堆栈记录在服务端日志
-        logger.exception("未处理异常: %s %s", request.method, request.url.path)
+        # 不向客户端泄露内部细节，完整堆栈记录在服务端日志（审查 M4：走结构化通道，
+        # trace_id/exception 字段由中间件与渲染器提供）
+        _logger.exception(
+            "unhandled_error",
+            detail=f"{request.method} {request.url.path}",
+            status_code=500,
+        )
         return JSONResponse(
             status_code=500, content=err("internal_error", "服务内部错误，详情见服务端日志")
         )

@@ -243,7 +243,7 @@ def test_chat_with_rag_returns_content_and_citations(client, fake_llm_server):
     assert citations and citations[0]["doc_title"] == "note.md"
 
 
-def test_chat_refuses_without_calling_llm(client, fake_llm_server, tmp_path, auth_headers):
+def test_chat_refuses_without_calling_llm(client, fake_llm_server, tmp_path, auth_headers, capsys):
     # 阈值调高 → 命中分数不足 → 拒答且不调用 LLM
     settings = Settings(
         data_dir=tmp_path / "data2",
@@ -270,6 +270,10 @@ def test_chat_refuses_without_calling_llm(client, fake_llm_server, tmp_path, aut
         )
         assert resp.json()["choices"][0]["message"]["content"] == "知识库中未找到相关内容。"
         assert fake_llm_server.RequestHandlerClass.calls == 0
+        # 审查 M2(b)：拒答事件（结构化 + kb_id 关联）
+        refused = _json_events(capsys.readouterr().out, "search_refused")
+        assert refused and refused[-1]["kb_id"] == kb_id
+        assert refused[-1]["detail"] == "refused"
 
 
 def test_chat_passthrough_without_rag(client, fake_llm_server):
@@ -312,12 +316,62 @@ def test_chat_with_rag_streams(client, fake_llm_server):
     assert content == "流式回答"
 
 
+def test_chat_stream_generator_close_emits_aborted_event(fake_llm_server, capsys):
+    # 审查 H2：消费者提前关闭生成器（客户端断连的确定性等价）时
+    # llm_call 事件照发且 aborted=true（HTTP 层断连为竞态路径，实测由审查完成）
+    from core.generation.llm import ChatClient
+
+    body = (
+        'data: {"choices": [{"delta": {"content": "流"}}]}\n\n'
+        'data: {"choices": [{"delta": {"content": "式"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    handler = fake_llm_server.RequestHandlerClass
+    handler.response_status = 200
+    handler.response_body = body.encode("utf-8")
+
+    chat = ChatClient(
+        f"http://127.0.0.1:{fake_llm_server.server_port}/v1", api_key="", model="m"
+    )
+    gen = chat.chat_stream([{"role": "user", "content": "hi"}])
+    assert next(gen) == "流"
+    gen.close()  # 确定性 GeneratorExit（等价客户端断连）
+    events = _json_events(capsys.readouterr().out, "llm_call")
+    assert events, "关闭路径未发 llm_call 事件"
+    assert events[-1]["aborted"] is True
+
+
 def test_chat_unknown_kb_404(client):
     resp = client.post(
         "/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "x"}], "rag_kb_id": "nope"},
     )
     assert resp.status_code == 404
+
+
+# ---------- 审查回归：trace 最外层 + 限流事件（M1/M2a） ----------
+
+
+def test_auth_rejection_carries_trace_id(client):
+    # 审查 M1：trace 中间件在最外层，认证拒绝路径同样带 X-Trace-Id
+    resp = client.get("/api/v1/kb", headers={"Authorization": "Bearer wrong-key"})
+    assert resp.status_code == 401
+    assert "X-Trace-Id" in resp.headers
+
+
+def test_rate_limited_emits_event_with_trace(client, capsys):
+    # 审查 M2(a)：429 限流事件带 trace_id（滥用检测信号需关联被拒请求）
+    for _ in range(30):  # per-IP 桶 30/0.5s，耗尽
+        client.get("/api/v1/kb")
+    resp = client.get("/api/v1/kb")
+    assert resp.status_code == 429
+    out = capsys.readouterr().out
+    events = _json_events(out, "rate_limited")
+    assert events, "未捕获到 rate_limited 事件"
+    event = events[-1]
+    assert event["trace_id"] == resp.headers["X-Trace-Id"]
+    assert event["actor"].startswith("ip:")
+    assert "limit" in event
 
 
 # ---------- 结构化日志（structlog-integration.md D1/D2） ----------
@@ -342,14 +396,15 @@ def test_search_emits_traced_event_without_query_text(client, capsys):
     client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
     resp = client.post("/api/v1/search", json={"query": "量子比特", "kb_id": kb_id})
     trace_id = resp.headers["X-Trace-Id"]
-    events = _json_events(capsys.readouterr().out, "search_ok")
+    out = capsys.readouterr().out  # 一次性捕获（审查 M3：二次调用返回空串，断言恒真）
+    events = _json_events(out, "search_ok")
     assert events, "未捕获到 search_ok 结构化事件"
     event = events[-1]
     assert event["trace_id"] == trace_id
     assert event["kb_id"] == kb_id
     assert event["hits"] >= 1
     assert isinstance(event["duration_ms"], (int, float))
-    assert "量子" not in capsys.readouterr().out.split("search_ok")[-1]
+    assert "量子" not in out  # 查询文本不落日志
 
 
 def test_chat_emits_llm_call_event(client, fake_llm_server, capsys):
@@ -361,9 +416,10 @@ def test_chat_emits_llm_call_event(client, fake_llm_server, capsys):
         json={"messages": [{"role": "user", "content": "什么是量子比特？"}], "rag_kb_id": kb_id},
     )
     assert resp.status_code == 200
-    events = _json_events(capsys.readouterr().out, "llm_call")
+    out = capsys.readouterr().out  # 一次性捕获（审查 M3）
+    events = _json_events(out, "llm_call")
     assert events, "未捕获到 llm_call 结构化事件"
     event = events[-1]
     assert "model" in event and "duration_ms" in event
     # 消息体不落日志（D2 约束）
-    assert "什么是量子比特" not in capsys.readouterr().out
+    assert "什么是量子比特" not in out

@@ -35,10 +35,6 @@ def _setup_env(tmp_path, monkeypatch):
 
 def test_ingest_chain_eager(tmp_path, monkeypatch, capsys):
     settings = _setup_env(tmp_path, monkeypatch)
-    # 无 app lifespan 的测试需自行配置 structlog（全局配置指向当前捕获流）
-    from core.observability.logging import configure_logging
-
-    configure_logging()
 
     from core.ingest import tasks as tasks_mod
     from core.ingest.pipeline import IngestPipeline
@@ -54,12 +50,9 @@ def test_ingest_chain_eager(tmp_path, monkeypatch, capsys):
     pipeline = IngestPipeline(registry, search_service, settings.data_dir / "ingest_work")
     monkeypatch.setattr(tasks_mod, "_pipeline", lambda: pipeline)
 
-    # 保存/还原全局 eager 配置，防止泄漏到后续测试
-    _prev_eager = tasks_mod.app.conf.task_always_eager
-    _prev_prop = tasks_mod.app.conf.task_eager_propagates
+    # monkeypatch 自动还原 eager 配置（防止泄漏到后续测试）
     monkeypatch.setattr(tasks_mod.app.conf, "task_always_eager", True)
     monkeypatch.setattr(tasks_mod.app.conf, "task_eager_propagates", True)
-    _ = (_prev_eager, _prev_prop)
 
     kb = registry.create_kb("库")
     doc = registry.create_document(kb.id, "d.md", "upload://d.md", "hash-1")

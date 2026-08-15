@@ -30,11 +30,13 @@ from apps.api.schemas import (
 from core.config import Settings
 from core.generation.llm import ChatClient, build_rag_messages
 from core.generation.refusal import refusal_field, should_refuse
+from core.observability.logging import get_logger
 from core.retrieval.search import SearchService
 from core.security.acl import AllowedKbs, require_kb_access
 from core.storage.registry import Registry
 
 router = APIRouter()
+_logger = get_logger("local_rag_server.chat")
 
 REFUSAL_TEXT = "知识库中未找到相关内容。"
 
@@ -102,6 +104,8 @@ def chat_completions(
         field = refusal_field(rerank_active=settings.rerank_backend != "off")
         if should_refuse(results, settings.refusal_threshold, field=field):
             request.app.state.metrics.incr("chat.refusals")
+            # structlog-integration.md D2：拒答事件（查询文本不落日志）
+            _logger.info("search_refused", kb_id=body.rag_kb_id, detail="refused")
             content = REFUSAL_TEXT
         else:
             request.app.state.metrics.incr("chat.rag_answers")

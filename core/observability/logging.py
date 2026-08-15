@@ -5,11 +5,12 @@ import sys
 import structlog
 
 # 日志字段白名单（observability.md 定稿；请求体/查询文本不落日志，审计 F-19）
-# structlog-integration.md D2 埋点新增：doc_id/stage/hits/model（均非敏感内容）
+# structlog-integration.md D2 埋点新增：doc_id/stage/hits/model/aborted/limit；
+# exception 为 ExceptionRenderer 产物（代码审查 H1：异常诊断信息不能丢）
 _ALLOWED_KEYS = {
     "event", "level", "timestamp", "trace_id", "actor", "kb_id",
-    "doc_id", "stage", "hits", "model", "duration_ms", "status_code",
-    "alert", "metric", "detail",
+    "doc_id", "stage", "hits", "model", "aborted", "limit", "duration_ms",
+    "status_code", "alert", "metric", "detail", "exception",
 }
 
 
@@ -45,6 +46,8 @@ def configure_logging(level: str = "INFO") -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            # 先渲染异常为字符串再过滤：logger.exception 的 exc_info 才有处可去（审查 H1）
+            structlog.processors.ExceptionRenderer(),
             _filter_fields,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(ensure_ascii=False),
