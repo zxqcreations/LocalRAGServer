@@ -48,6 +48,9 @@ class SearchService:
         self._overlap = overlap
         self._max_pdf_pages = max_pdf_pages
         self._hybrid_cache: dict[str, HybridRetriever] = {}  # KB 级混合检索缓存
+        # KB 级 chunk 序列缓存（parent 回填用；SLO 压测：全量加载 ~430ms/查询，
+        # 必须复用——摄取/删除时失效）
+        self._chunks_cache: dict[str, tuple[list[str], dict[str, str], dict[str, str]]] = {}
         self._reranker = reranker or NoopReranker()
         self._retrieval_top_k = retrieval_top_k
         self._rerank_top_k = rerank_top_k
@@ -164,6 +167,16 @@ class SearchService:
 
     def _invalidate_hybrid(self, kb_id: str) -> None:
         self._hybrid_cache.pop(kb_id, None)
+        self._chunks_cache.pop(kb_id, None)
+
+    def _chunk_sequences(self, kb_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        """KB 级 chunk 序列缓存（all_ids, ordered, doc_map）。"""
+        if kb_id not in self._chunks_cache:
+            all_ids = [cid for cid, _ in self._registry.list_chunks(kb_id)]
+            ordered = dict(self._registry.list_chunks(kb_id))
+            doc_map = self._registry.get_chunk_doc_map(all_ids)
+            self._chunks_cache[kb_id] = (all_ids, ordered, doc_map)
+        return self._chunks_cache[kb_id]
 
     def search(self, kb_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
         """混合检索（dense + BM25 → RRF，架构 §6）→ 重排 → top-N 截断 → 正文回查。
@@ -189,9 +202,13 @@ class SearchService:
         top_k_scores = [s for _, s in reranked]
         docs_by_chunk = self._registry.get_chunk_doc_map([h.chunk_id for h in top_k_hits])
         docs = self._registry.get_documents_by_ids(list(set(docs_by_chunk.values())))
-        # parent 回填（架构 §5/§6）：命中子块扩展相邻上下文
+        # parent 回填（架构 §5/§6）：命中子块扩展相邻上下文（KB 级序列缓存）
         expanded = expand_parents(
-            self._registry, kb_id, [h.chunk_id for h in top_k_hits], target_size=2048
+            self._registry,
+            kb_id,
+            [h.chunk_id for h in top_k_hits],
+            target_size=2048,
+            chunks_cache=self._chunk_sequences(kb_id),
         )
         results = []
         for h, rerank_score in zip(top_k_hits, top_k_scores, strict=True):

@@ -67,6 +67,9 @@ def main() -> int:
     parser.add_argument("--docs", type=int, default=200, help="预热文档数（合成 MD）")
     parser.add_argument("--queries", type=int, default=100, help="查询次数")
     parser.add_argument("--fast", action="store_true", help="批量入库（万级压测）")
+    parser.add_argument(
+        "--server", default="", help="Qdrant server URL（生产形态 HNSW；空 = local 模式）"
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -77,7 +80,11 @@ def main() -> int:
     tmp_qdrant = Path(tempfile.mkdtemp(prefix="rag-search-qdrant-"))
     registry = Registry(f"sqlite:///{tmp_db}")
     embedder = build_embedder(settings)
-    store = QdrantVectorStore(path=tmp_qdrant)  # 临时向量库：不污染生产数据目录
+    store = (
+        QdrantVectorStore(url=args.server)
+        if args.server
+        else QdrantVectorStore(path=tmp_qdrant)  # 临时向量库：不污染生产数据目录
+    )
     search_service = SearchService(store, registry, embedder)
     search_service.ensure_ready()
     pipeline = IngestPipeline(registry, search_service, settings.data_dir / "ingest_work")
