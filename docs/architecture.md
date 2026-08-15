@@ -1,6 +1,7 @@
 # LocalRAGServer 技术架构设计
 
-> 版本 v2.0-draft · 2026-08-15（v2.0 草案变更：Phase 4/5 落地回填——Web 管理端五模块 + 独立会话认证、structlog 全链路、RAGAS 评测闭环、URL 订阅爬取、压测基线；§19-21 为草案新增章节，正式批准随 Phase 6 DoD）
+> 版本 v2.0 · 2026-08-16（正式批准：Phase 6 七项关键门达成——①安全审计②备份恢复③SLO 压测④故障演练⑤发布回滚⑥灰度替代决策⑦迁移清单；§19-21 为 Phase 4/5 落地章节）
+> v2.0-draft 变更：Phase 4/5 落地回填——Web 管理端五模块 + 独立会话认证、structlog 全链路、RAGAS 评测闭环、URL 订阅爬取、压测基线
 > v1.3 变更：Phase 2/3 落地回填——混合检索 BM25+RRF 实测 MRR +8.1pp、ACL 强制层、MCP 双 transport、限流本地化 ADR-005、审计管线、探针
 > 输入约束：NVIDIA GPU 8~16GB 单机（实机 RTX 2080 Ti 11GB，Turing SM75）· 十万级文档（≈千万级 chunk）· PDF/Office/代码/网页 · 中英混合 · 服务对象为 Agent（MCP + REST）+ 人工管理端（Web）
 
