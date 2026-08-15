@@ -47,6 +47,15 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 AllowedKbsDep = Annotated[AllowedKbs, Depends(get_allowed_kbs)]
 
 
+def _call_llm(chat_client: ChatClient, messages: list[dict]) -> str:
+    """LLM 调用统一异常面：上游不可达 → 502（故障演练降级矩阵契约）。"""
+    try:
+        return chat_client.chat(messages).content
+    except Exception:
+        # 具体堆栈已在 llm.py 的 llm_call_error 结构化事件中记录
+        raise_http(502, "llm_unavailable", "LLM 服务不可用，请稍后重试")
+
+
 def _citations(results) -> list[Citation]:
     return [
         Citation(
@@ -114,13 +123,13 @@ def chat_completions(
             messages = build_rag_messages(question, [r.expanded_content for r in results])
             if body.stream:
                 return _stream_response(chat_client, model, messages)
-            content = chat_client.chat(messages).content
+            content = _call_llm(chat_client, messages)
             citations = _citations(results)
     else:
         messages = [m.model_dump() for m in body.messages]  # 纯 LLM 透传
         if body.stream:
             return _stream_response(chat_client, model, messages)
-        content = chat_client.chat(messages).content
+        content = _call_llm(chat_client, messages)
 
     return ChatResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
