@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from secrets import compare_digest
 
+import structlog
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -186,7 +187,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await call_next(request)
         request.state.trace_id = uuid.uuid4().hex[:16]
         request.state.started_at = time.perf_counter()
-        response = await call_next(request)
+        # structlog-integration.md D1：trace_id 进入日志上下文（contextvars 随调用链传播，
+        # 检索/重排/生成同步路径自动携带；请求结束清除防串扰）
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(trace_id=request.state.trace_id)
+        try:
+            response = await call_next(request)
+        finally:
+            structlog.contextvars.clear_contextvars()
         response.headers["X-Trace-Id"] = request.state.trace_id
         app.state.metrics.incr("api.requests")
         if response.status_code >= 400:

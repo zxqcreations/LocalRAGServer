@@ -9,14 +9,18 @@ Celery 任务为薄封装；本类可独立测试（注入 Registry/SearchServic
 """
 import hashlib
 import json
+import time
 from pathlib import Path
 
 from core.ingest.chunker import chunk_text
 from core.ingest.parsers import parse_file
 from core.ingest.state import Stage, retry_from, stage_reached
+from core.observability.logging import get_logger
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
 from core.storage.vector import VectorPoint
+
+_logger = get_logger("local_rag_server.ingest")
 
 MAX_ATTEMPTS = 5  # 契约 §3：超限进 DLQ（attempt 字段承载）
 
@@ -69,6 +73,20 @@ class IngestPipeline:
     def _hash_file(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
+    def _emit_stage(self, job, stage: str, started: float) -> None:
+        """structlog-integration.md D2：阶段完成事件。
+
+        仅在真实完成时发（幂等跳过不发，防重试/重启刷日志）；
+        trace_id 由 worker 任务入口绑定（= job_id，四阶段同一条 trace）。
+        """
+        _logger.info(
+            "ingest_stage_done",
+            kb_id=job.kb_id,
+            doc_id=job.doc_id,
+            stage=stage,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+
     def _stale(self, job_id: str, artifact: str, upstream: Path, meta: str) -> bool:
         """产物缺失或上游文件哈希与记录的元哈希不一致 => 需要重算。"""
         d = self._job_dir(job_id)
@@ -79,6 +97,7 @@ class IngestPipeline:
         return meta_path.read_text(encoding="utf-8").strip() != self._hash_file(upstream)
 
     def parse_stage(self, job_id: str) -> None:
+        started = time.perf_counter()
         self._resume_if_failed(job_id)
         job = self._require_job(job_id)
         # source 保留原始扩展名（解析器按后缀路由）；上传时落盘为 source.<ext>
@@ -94,8 +113,10 @@ class IngestPipeline:
         (d / "text.txt").write_text(parsed.text, encoding="utf-8")
         (d / "text.txt.sha256").write_text(self._hash_file(sources[0]), encoding="utf-8")
         self.registry.transition_job(job_id, Stage.PARSED)
+        self._emit_stage(job, Stage.PARSED.value, started)
 
     def chunk_stage(self, job_id: str) -> None:
+        started = time.perf_counter()
         self._resume_if_failed(job_id)
         job = self._require_job(job_id)
         d = self._job_dir(job_id)
@@ -113,8 +134,10 @@ class IngestPipeline:
         (d / "chunks.json").write_text(json.dumps(chunk_ids, ensure_ascii=False), encoding="utf-8")
         (d / "chunks.json.sha256").write_text(self._hash_file(d / "text.txt"), encoding="utf-8")
         self.registry.transition_job(job_id, Stage.CHUNKED)
+        self._emit_stage(job, Stage.CHUNKED.value, started)
 
     def embed_stage(self, job_id: str) -> None:
+        started = time.perf_counter()
         self._resume_if_failed(job_id)
         job = self._require_job(job_id)
         d = self._job_dir(job_id)
@@ -131,8 +154,10 @@ class IngestPipeline:
             self._hash_file(d / "chunks.json"), encoding="utf-8"
         )
         self.registry.transition_job(job_id, Stage.EMBEDDED)
+        self._emit_stage(job, Stage.EMBEDDED.value, started)
 
     def index_stage(self, job_id: str) -> None:
+        started = time.perf_counter()
         self._resume_if_failed(job_id)
         job = self._require_job(job_id)
         if stage_reached(Stage(job.stage), Stage.INDEXED):
@@ -155,6 +180,7 @@ class IngestPipeline:
         if actual != len(chunk_ids):
             raise RuntimeError(f"对账失败：Qdrant {actual} 点 != 注册表 {len(chunk_ids)} chunk")
         self.registry.transition_job(job_id, Stage.READY)
+        self._emit_stage(job, Stage.INDEXED.value, started)
 
     def run(self, job_id: str) -> None:
         """全链路执行（测试/冒烟用）；阶段失败即转 FAILED（与任务行为一致，契约 §2.4）。"""

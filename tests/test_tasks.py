@@ -3,10 +3,25 @@
 要点：eager 模式的 retry 会内联重跑任务，若每次重建 Qdrant 客户端会触发
 本地模式目录锁冲突——测试注入共享管线（monkeypatch tasks._pipeline）。
 """
+import json
+
 from celery import chain
 
 from core.config import get_settings
 from core.ingest.state import Stage
+
+
+def _stage_events(capsys) -> list[dict]:
+    """从捕获输出中解析 ingest_stage_done 结构化事件（structlog JSON 行）。"""
+    events = []
+    for line in capsys.readouterr().out.splitlines():
+        try:
+            payload = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if payload.get("event") == "ingest_stage_done":
+            events.append(payload)
+    return events
 
 
 def _setup_env(tmp_path, monkeypatch):
@@ -18,8 +33,12 @@ def _setup_env(tmp_path, monkeypatch):
     return settings
 
 
-def test_ingest_chain_eager(tmp_path, monkeypatch):
+def test_ingest_chain_eager(tmp_path, monkeypatch, capsys):
     settings = _setup_env(tmp_path, monkeypatch)
+    # 无 app lifespan 的测试需自行配置 structlog（全局配置指向当前捕获流）
+    from core.observability.logging import configure_logging
+
+    configure_logging()
 
     from core.ingest import tasks as tasks_mod
     from core.ingest.pipeline import IngestPipeline
@@ -59,6 +78,13 @@ def test_ingest_chain_eager(tmp_path, monkeypatch):
     assert result.successful(), result.result
     assert registry.get_job(job.id).stage == Stage.READY.value
     assert registry.get_document(kb.id, doc.id).chunk_count >= 1
+    # structlog-integration.md D1/D2：四阶段各发一次完成事件，
+    # trace_id 由任务入口绑定（= job_id），全程同一条 trace
+    events = _stage_events(capsys)
+    assert [e["stage"] for e in events] == ["parsed", "chunked", "embedded", "indexed"]
+    assert all(e["trace_id"] == job.id for e in events)
+    assert all(e["kb_id"] == kb.id and e["doc_id"] == doc.id for e in events)
+    assert all(isinstance(e["duration_ms"], (int, float)) for e in events)
     registry.close()
     store.close()
     get_settings.cache_clear()

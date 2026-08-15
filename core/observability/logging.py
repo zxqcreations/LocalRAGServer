@@ -5,9 +5,11 @@ import sys
 import structlog
 
 # 日志字段白名单（observability.md 定稿；请求体/查询文本不落日志，审计 F-19）
+# structlog-integration.md D2 埋点新增：doc_id/stage/hits/model（均非敏感内容）
 _ALLOWED_KEYS = {
     "event", "level", "timestamp", "trace_id", "actor", "kb_id",
-    "duration_ms", "status_code", "alert", "metric", "detail",
+    "doc_id", "stage", "hits", "model", "duration_ms", "status_code",
+    "alert", "metric", "detail",
 }
 
 

@@ -2,6 +2,7 @@
 
 本机开发用 filesystem 代理（ADR-002）；生产切 Redis 只改 broker 配置。
 """
+import structlog
 from celery import Celery, chain
 
 from core.config import get_settings
@@ -81,8 +82,16 @@ def _handle_failure(self, job_id: str, pipeline: IngestPipeline, exc: Exception)
     raise self.retry(exc=exc) from exc
 
 
+def _bind_job_trace(job_id: str) -> None:
+    """structlog-integration.md D1：worker 无 HTTP 层，任务入口绑定 trace_id=job_id
+    （四阶段事件同一条 trace）；先清空防上一任务残留串扰。"""
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(trace_id=job_id)
+
+
 @app.task(bind=True, name="ingest.parse", max_retries=MAX_ATTEMPTS)
 def parse_task(self, job_id: str):
+    _bind_job_trace(job_id)
     pipeline = _pipeline()
     try:
         pipeline.parse_stage(job_id)
@@ -92,6 +101,7 @@ def parse_task(self, job_id: str):
 
 @app.task(bind=True, name="ingest.chunk", max_retries=MAX_ATTEMPTS)
 def chunk_task(self, job_id: str):
+    _bind_job_trace(job_id)
     pipeline = _pipeline()
     try:
         pipeline.chunk_stage(job_id)
@@ -101,6 +111,7 @@ def chunk_task(self, job_id: str):
 
 @app.task(bind=True, name="ingest.embed", max_retries=MAX_ATTEMPTS)
 def embed_task(self, job_id: str):
+    _bind_job_trace(job_id)
     pipeline = _pipeline()
     try:
         pipeline.embed_stage(job_id)
@@ -110,6 +121,7 @@ def embed_task(self, job_id: str):
 
 @app.task(bind=True, name="ingest.index", max_retries=MAX_ATTEMPTS)
 def index_task(self, job_id: str):
+    _bind_job_trace(job_id)
     pipeline = _pipeline()
     try:
         pipeline.index_stage(job_id)

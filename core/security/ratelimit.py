@@ -2,11 +2,12 @@
 
 fail-open 语义：限流是保护而非阻断，内部异常时放行并记录（ADR-005 约束）。
 """
-import logging
 import threading
 from typing import Protocol, runtime_checkable
 
-logger = logging.getLogger("local_rag_server")
+from core.observability.logging import get_logger
+
+logger = get_logger("local_rag_server.ratelimit")
 
 
 @runtime_checkable
@@ -51,7 +52,8 @@ class FailOpenLimiter:
         try:
             return self._inner.allow(key, capacity, refill_per_s)
         except Exception:
-            logger.exception("限流组件异常，fail-open 放行：key=%s", key)
+            # structlog-integration.md D2：限流异常事件（fail-open 是设计语义，非告警）
+            logger.exception("rate_limiter_fail_open", detail=key)
             return True
 
 

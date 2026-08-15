@@ -318,3 +318,52 @@ def test_chat_unknown_kb_404(client):
         json={"messages": [{"role": "user", "content": "x"}], "rag_kb_id": "nope"},
     )
     assert resp.status_code == 404
+
+
+# ---------- 结构化日志（structlog-integration.md D1/D2） ----------
+
+
+def _json_events(out: str, event_name: str) -> list[dict]:
+    """从捕获输出解析指定事件名的 structlog JSON 行。"""
+    events = []
+    for line in out.splitlines():
+        try:
+            payload = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if payload.get("event") == event_name:
+            events.append(payload)
+    return events
+
+
+def test_search_emits_traced_event_without_query_text(client, capsys):
+    # D1/D2：检索事件携带 trace_id（与 X-Trace-Id 一致）；查询文本不落日志
+    kb_id = _create_kb(client)
+    client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+    resp = client.post("/api/v1/search", json={"query": "量子比特", "kb_id": kb_id})
+    trace_id = resp.headers["X-Trace-Id"]
+    events = _json_events(capsys.readouterr().out, "search_ok")
+    assert events, "未捕获到 search_ok 结构化事件"
+    event = events[-1]
+    assert event["trace_id"] == trace_id
+    assert event["kb_id"] == kb_id
+    assert event["hits"] >= 1
+    assert isinstance(event["duration_ms"], (int, float))
+    assert "量子" not in capsys.readouterr().out.split("search_ok")[-1]
+
+
+def test_chat_emits_llm_call_event(client, fake_llm_server, capsys):
+    _set_llm_response(fake_llm_server, "量子比特是基本单元。[1]")
+    kb_id = _create_kb(client)
+    client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "什么是量子比特？"}], "rag_kb_id": kb_id},
+    )
+    assert resp.status_code == 200
+    events = _json_events(capsys.readouterr().out, "llm_call")
+    assert events, "未捕获到 llm_call 结构化事件"
+    event = events[-1]
+    assert "model" in event and "duration_ms" in event
+    # 消息体不落日志（D2 约束）
+    assert "什么是量子比特" not in capsys.readouterr().out
