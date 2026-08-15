@@ -26,3 +26,15 @@
 
 - ③满数据量无法本机实测：以万级外推 + 架构 §8.4 口径为验收依据，发布观察期兜底
 - ⑥⑦ 环境受限：v1.0.0 声明中如实标注，不虚报完成
+
+## 附录 A · TLS 部署前置条件清单（门①交付物，安全审计域 1）
+
+1. **反向代理终止 TLS**：nginx/caddy 前置 443；ACME 自动续期；HTTP→HTTPS 301；TLS≥1.2 优先 1.3；私钥 600
+2. **代理头透传**：uvicorn `--proxy-headers --forwarded-allow-ips <信任网段>`（否则 per-IP 限流坍缩 + 审计 IP 失真）；nginx `X-Forwarded-For` 设置
+3. **会话 Cookie**：启用 `Secure` + `__Host-` 前缀（admin.py:77-89 预留位）
+4. **安全头**：HSTS/nosniff/X-Frame-Options DENY/Referrer-Policy/基础 CSP
+5. **暴露面收敛**：/docs、/openapi.json、/redoc、/readyz 移出公开或回环限定；`RAG_HOST` 保持 127.0.0.1；`url_fetch_allow_loopback` 保持 false
+6. **内部服务隔离**：qdrant(6333)/postgres(5432)/redis(6379)/llm(9001)/judge(9002) 仅回环；MCP HTTP transport 若启用须走同一 TLS 面 + ACL 注入
+7. **请求体对齐**：nginx `client_max_body_size` ≥ `RAG_MAX_UPLOAD_MB`；JSON 端点 body 上限（M-5）
+8. **数据目录防护**：data_dir 700、初始密码文件 600、备份加密存储
+9. **限流升级**：生产切 Redis 令牌桶（ADR-005），多 worker 才有效
