@@ -1,7 +1,8 @@
 {
-  "faithfulness": 0.8717,
-  "answer_relevancy": 0.7477,
-  "context_precision": 0.9251,
-  "context_recall": 0.98,
-  "dataset_version": "v1"
+  "faithfulness": 0.9247,
+  "answer_relevancy": 0.8639,
+  "context_precision": 0.8467,
+  "context_recall": 1.0,
+  "dataset_version": "v1",
+  "judge": "qwen2.5-7b-instruct（独立评判模型，与生成 Qwen3-8B 解耦）"
 }

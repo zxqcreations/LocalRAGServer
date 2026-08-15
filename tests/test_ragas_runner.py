@@ -187,8 +187,10 @@ def test_local_embeddings_uses_injected_model(monkeypatch):
     from eval.ragas_runner import _LocalEmbeddings
 
     class FakeST:
-        def __init__(self, model_name):
+        def __init__(self, model_name, device=None, local_files_only=False):
             assert model_name == "BAAI/bge-m3"
+            assert device == "cpu"  # 默认 CPU（GPU 让位 llama-server）
+            assert local_files_only is True  # 离线加载（HF 缓存）
 
         def encode(self, texts, normalize_embeddings=False, batch_size=16):
             assert normalize_embeddings is True

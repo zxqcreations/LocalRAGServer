@@ -9,6 +9,7 @@
 """
 import argparse
 import json
+import math
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -81,20 +82,33 @@ def run_eval(
     generate_fn: GenerateFn,
     judge: Judge,
     on_record=None,
+    skip_errors: bool = False,
 ) -> list[EvalRecord]:
     """逐条评测：检索 → 生成 → 评判，返回与输入同序的记录列表。
 
     on_record(record)：每条完成后回调（长评测逐条落盘——中断后可 --offset 续跑，
     已完成的明细不丢失）。
+    skip_errors=True 时单条失败跳过并继续（长评测编排用；失败条目不落盘，
+    完成后按明细数与总数对比发现缺口）；False 时 fail-fast。
     """
     records: list[EvalRecord] = []
     for entry in entries:
-        contexts = search_fn(entry.question, entry.kb_type)
-        answer = generate_fn(entry.question, contexts)
-        metrics = judge.judge(entry.question, answer, contexts, entry.reference_answer)
-        missing = [m for m in METRICS if m not in metrics]
-        if missing:
-            raise ValueError(f"{entry.id}: 评判结果缺少指标 {missing}")
+        try:
+            contexts = search_fn(entry.question, entry.kb_type)
+            answer = generate_fn(entry.question, contexts)
+            metrics = judge.judge(entry.question, answer, contexts, entry.reference_answer)
+            missing = [m for m in METRICS if m not in metrics]
+            if missing:
+                raise ValueError(f"{entry.id}: 评判结果缺少指标 {missing}")
+            bad = [m for m in METRICS if not math.isfinite(float(metrics[m]))]
+            if bad:
+                # 评判失败（LLM 端点不可达/输出不可解析）不得以 NaN 落盘污染基线
+                raise ValueError(f"{entry.id}: 评判结果含非有限值 {bad}")
+        except ValueError as exc:
+            if not skip_errors:
+                raise
+            print(f"[跳过] {exc}", file=sys.stderr)
+            continue
         record = EvalRecord(
             id=entry.id,
             kb_type=entry.kb_type,
@@ -162,12 +176,21 @@ class _LocalEmbeddings(Embeddings):
 
     实测注记：llama-server 默认不支持 /v1/embeddings（501），RAGAS 上下文指标
     的嵌入必须走本机模型——与生产检索同源（bge-m3），不引入第二套嵌入。
+    默认 CPU：评判嵌入量小（50 条上下文），GPU 让位给 llama-server
+    （11GB 显存下 bge-m3 与 8B 模型共驻卡死加载，实测）。
     """
 
-    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+    def __init__(
+        self, model_name: str = "BAAI/bge-m3",
+        device: str | None = None,
+    ) -> None:
+        import os
+
         from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
-        self._model = SentenceTransformer(model_name)
+        device = device or os.environ.get("RAGAS_EMBEDDING_DEVICE", "cpu")
+        # local_files_only：模型已在 HF 缓存（本机实测），联网检查会被代理拖慢/卡死
+        self._model = SentenceTransformer(model_name, device=device, local_files_only=True)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [
@@ -248,6 +271,9 @@ def main() -> int:
     # 分批执行：单批次限时长（LLM 评判耗时），中断后可用 --offset 续跑
     parser.add_argument("--offset", type=int, default=0, help="跳过前 N 条（续跑起点）")
     parser.add_argument("--limit", type=int, default=0, help="最多评测 N 条（0 = 全部）")
+    parser.add_argument(
+        "--skip-errors", action="store_true", help="单条失败跳过继续（长评测编排用）"
+    )
     args = parser.parse_args()
 
     missing = check_ragas_deps()
@@ -300,7 +326,12 @@ def main() -> int:
                     + "\n"
                 )
 
-        records = run_eval(entries, _search, _generate, judge, on_record=_append)
+        records = run_eval(
+            entries, _search, _generate, judge, on_record=_append, skip_errors=args.skip_errors
+        )
+        if not records:
+            print("无有效评测记录（全部条目失败或为空）")
+            return 1
         summary = summarize(records)
         report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"评测完成：{len(records)} 条 → {report_path}")
