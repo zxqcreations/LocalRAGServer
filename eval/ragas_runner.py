@@ -202,7 +202,11 @@ def build_judge():
     from ragas.run_config import RunConfig  # type: ignore[import-not-found]
 
     base_url = os.environ.get("RAGAS_LLM_BASE_URL", "http://127.0.0.1:9001/v1")
-    llm = ChatOpenAI(model="qwen3-8b", base_url=base_url, api_key=SecretStr("local"))
+    # judge 独立选型（quality.md Phase 5 关键门 ①）：评判模型与生成模型解耦。
+    # 默认回退同源（本机显存受限时），配置后 judge 走独立端点/模型
+    judge_base_url = os.environ.get("RAGAS_JUDGE_BASE_URL", base_url)
+    judge_model = os.environ.get("RAGAS_JUDGE_MODEL", "qwen3-8b")
+    llm = ChatOpenAI(model=judge_model, base_url=judge_base_url, api_key=SecretStr("local"))
     embeddings = _LocalEmbeddings()
     # max_workers=3：llama-server 4 slots 支持并发评判（单条 ~1min → 3 并行）
     run_config = RunConfig(max_workers=3, timeout=300)
