@@ -99,6 +99,7 @@ def chat_completions(
             action="search",
             kb_id=body.rag_kb_id,
             ip=request.client.host if request.client else "",
+            trace_id=getattr(request.state, "trace_id", ""),
         )
         # 拒答判定（审计 F12/ARC-014）：字段按重排是否激活选择，阈值语义 best < threshold
         field = refusal_field(rerank_active=settings.rerank_backend != "off")

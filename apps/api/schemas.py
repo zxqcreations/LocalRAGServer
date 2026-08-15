@@ -72,7 +72,8 @@ class DocumentOut(BaseModel):
 
 
 class UrlIngestRequest(BaseModel):
-    url: str = Field(min_length=1, max_length=2048)
+    # 安全审计 M-10：与订阅 schema 一致，netloc 拒绝 userinfo 凭据形态
+    url: str = Field(min_length=1, max_length=2048, pattern=r"^https?://[^@/]+(/.*)?$")
 
 
 class JobOut(BaseModel):

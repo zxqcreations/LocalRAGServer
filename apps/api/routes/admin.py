@@ -55,12 +55,14 @@ class AnnotationRequest(BaseModel):
 class KeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     kb_acl: list[str] = Field(default_factory=lambda: ["*"])
-    expires_in_days: int | None = None
+    # 安全审计 M-10：有效期上限钳制（防"百年 Key"）
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
 
 
 class SubscriptionCreateRequest(BaseModel):
     kb_id: str = Field(min_length=1)
-    url: str = Field(min_length=1, max_length=2048, pattern=r"^https?://")
+    # 安全审计 M-10：netloc 拒绝 userinfo（https://user:pass@host 凭据形态不入库）
+    url: str = Field(min_length=1, max_length=2048, pattern=r"^https?://[^@/]+(/.*)?$")
     interval_hours: int = Field(default=24, ge=1, le=24 * 30)
 
 
@@ -112,6 +114,7 @@ def login(
         action="login",
         kb_id="",
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok(
         {
@@ -133,7 +136,12 @@ def change_password(
     user = request.state.admin_user
     if not verify_password(body.current_password, user.password_hash):
         raise_http(401, "admin_login_failed", "当前密码错误")
-    registry.set_admin_password(user.id, hash_password(body.new_password))
+    # M-3：吊销其他会话，保留当前（改密请求自身会话）
+    registry.set_admin_password(
+        user.id,
+        hash_password(body.new_password),
+        exempt_session_hash=request.state.admin_session_hash,
+    )
     # 安全审计 H-1：改密成功后删除初始密码明文文件（一次性凭据即用即焚）
     (settings.data_dir / "admin_initial_password").unlink(missing_ok=True)
     registry.record_audit(  # 安全审计 H-3：独立动作码
@@ -141,6 +149,7 @@ def change_password(
         action="password_change",
         kb_id="",
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok({"changed": True})
 
@@ -153,6 +162,7 @@ def logout(request: Request, registry: RegistryDep):
         action="logout",
         kb_id="",
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     registry.revoke_admin_session(request.state.admin_session_hash)
     request.state.clear_session_cookie = True
@@ -213,12 +223,18 @@ def create_key(body: KeyCreateRequest, request: Request, registry: RegistryDep):
     expiry = None
     if body.expires_in_days is not None:
         expiry = datetime.now(UTC) + _td(days=body.expires_in_days)
+    # 安全审计 M-10：kb_acl 引用的 KB 必须存在（typo 不静默成空权限集）
+    if body.kb_acl != ["*"]:
+        for kb_id in body.kb_acl:
+            if registry.get_kb(kb_id) is None:
+                raise_http(422, "kb_acl_invalid", f"kb_acl 引用不存在的知识库：{kb_id}")
     record, raw = registry.create_api_key(body.name, body.kb_acl, expires_at=expiry)
     registry.record_audit(  # 安全审计 H-3：独立动作码
         actor=f"admin:{user.username}",
         action="key_create",
         kb_id="",
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok({"id": record.id, "name": record.name, "api_key": raw})  # 明文仅此一次
 
@@ -254,6 +270,7 @@ def revoke_key(key_id: str, request: Request, registry: RegistryDep):
         action="key_revoke",
         kb_id="",
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok({"revoked": True})
 
@@ -342,6 +359,7 @@ def create_subscription(
         action="subscription_create",
         kb_id=body.kb_id,
         ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok(_subscription_out(sub))
 

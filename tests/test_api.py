@@ -390,6 +390,16 @@ def _json_events(out: str, event_name: str) -> list[dict]:
     return events
 
 
+def test_audit_records_carry_trace_id(client):
+    # 安全审计 M-2：审计条目与结构化日志同 trace 关联
+    kb_id = _create_kb(client)
+    client.post(f"/api/v1/kb/{kb_id}/documents", files=_md_file())
+    resp = client.post("/api/v1/search", json={"query": "量子", "kb_id": kb_id})
+    trace_id = resp.headers["X-Trace-Id"]
+    entries = client.app.state.registry.list_audit(limit=5)
+    assert any(e.trace_id == trace_id for e in entries)
+
+
 def test_search_emits_traced_event_without_query_text(client, capsys):
     # D1/D2：检索事件携带 trace_id（与 X-Trace-Id 一致）；查询文本不落日志
     kb_id = _create_kb(client)

@@ -392,3 +392,34 @@ def test_subscription_create_rejects_bad_url(tmp_path):
             headers={"X-CSRF-Token": data["csrf_token"]},
         )
         assert resp.status_code == 422
+
+
+def test_input_policy_guards(tmp_path):
+    # 安全审计 M-10：有效期上限 / kb_acl 存在性 / userinfo 凭据形态
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login_admin(client)
+        headers = {"X-CSRF-Token": data["csrf_token"]}
+        # 百年 Key → 422
+        century = client.post(
+            "/admin/api/keys",
+            json={"name": "k", "expires_in_days": 36500},
+            headers=headers,
+        )
+        assert century.status_code == 422
+        # kb_acl 引用不存在 KB → 422
+        ghost = client.post(
+            "/admin/api/keys",
+            json={"name": "k", "kb_acl": ["nonexistent-kb"]},
+            headers=headers,
+        )
+        assert ghost.status_code == 422
+        assert ghost.json()["error"]["code"] == "kb_acl_invalid"
+        # userinfo URL → 422
+        cred = client.post(
+            "/admin/api/subscriptions",
+            json={"kb_id": "x", "url": "https://user:pass@example.com/"},
+            headers=headers,
+        )
+        assert cred.status_code == 422

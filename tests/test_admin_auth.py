@@ -69,6 +69,19 @@ def test_admin_session_lifecycle(tmp_path):
     assert registry.find_admin_session(session_hash) is None
 
 
+def test_password_change_revokes_other_sessions(tmp_path):
+    # 安全审计 M-3：改密吊销其他会话；改密请求自身会话保留
+    registry = Registry(f"sqlite:///{tmp_path / 'r.db'}")
+    user = registry.ensure_admin_user("admin", hash_password("p"))
+    s1 = hash_session("session-1")
+    s2 = hash_session("session-2")
+    registry.create_admin_session(user.id, s1, session_expiry(), csrf_token="t1")
+    registry.create_admin_session(user.id, s2, session_expiry(), csrf_token="t2")
+    registry.set_admin_password(user.id, hash_password("new-p"), exempt_session_hash=s1)
+    assert registry.find_admin_session(s1) is not None  # 当前会话保留
+    assert registry.find_admin_session(s2) is None  # 其他会话吊销
+
+
 def test_schema_self_heal_adds_csrf_token_column(tmp_path):
     # 老库升级：adminsession 表缺 csrf_token 列时，Registry 初始化补列（幂等）
     from sqlalchemy import create_engine, inspect, text

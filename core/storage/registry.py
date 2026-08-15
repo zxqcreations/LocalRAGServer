@@ -490,7 +490,9 @@ class Registry:
                 select(AdminUser).where(AdminUser.username == username)  # type: ignore[arg-type]
             ).first()
 
-    def set_admin_password(self, user_id: str, password_hash: str) -> None:
+    def set_admin_password(
+        self, user_id: str, password_hash: str, exempt_session_hash: str | None = None
+    ) -> None:
         with Session(self._engine) as s:
             user = s.get(AdminUser, user_id)
             if user is None:
@@ -498,6 +500,12 @@ class Registry:
             user.password_hash = password_hash
             user.must_change_password = False
             s.add(user)
+            # 安全审计 M-3：改密吊销该用户其他会话（消除旧会话 30 分钟存活窗口）；
+            # 当前会话保留（改密请求自身的会话，改密后无需重登）
+            stmt = delete(AdminSession).where(AdminSession.user_id == user_id)  # type: ignore[arg-type]
+            if exempt_session_hash:
+                stmt = stmt.where(AdminSession.session_hash != exempt_session_hash)  # type: ignore[attr-defined]
+            s.exec(stmt)
             s.commit()
 
     def set_admin_initial_password(self, user_id: str, password_hash: str) -> None:

@@ -96,6 +96,7 @@ def upload_document(
             action="ingest",
             kb_id=kb_id,
             ip=request.client.host if request.client else "",
+            trace_id=getattr(request.state, "trace_id", ""),
         )
     except UnsupportedFormatError as exc:
         raise_http(415, UNSUPPORTED_FORMAT, str(exc))
@@ -148,6 +149,7 @@ def ingest_url(
         action="ingest",
         kb_id=kb_id,
         ip=request.client.host if request.client else "",
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok(JobOut(id=job.id, doc_id=doc.id, stage=job.stage, attempt=job.attempt))
 
@@ -186,5 +188,6 @@ def delete_document(
         action="delete",
         kb_id=kb_id,
         ip=request.client.host if request.client else "",
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok()

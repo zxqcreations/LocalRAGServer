@@ -288,6 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         action="login_failed",
                         kb_id="",
                         ip=request.client.host if request.client else "",
+                        trace_id=getattr(request.state, "trace_id", ""),
                     )
                 return response
             return JSONResponse(

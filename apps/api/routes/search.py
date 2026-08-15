@@ -45,6 +45,7 @@ def search(
         action="search",
         kb_id=body.kb_id,
         ip=request.client.host if request.client else "",
+        trace_id=getattr(request.state, "trace_id", ""),
     )
     return ok(
         [SearchResultOut.model_validate(r) for r in results],
