@@ -131,6 +131,14 @@ def chat_completions(
             return _stream_response(chat_client, model, messages)
         content = _call_llm(chat_client, messages)
 
+    # 安全审计 M-8：Chat 调用入审计（rag 与透传区分；消息内容不入审计）
+    registry.record_audit(
+        actor=getattr(request.state, "actor", ""),
+        action="chat_rag" if body.rag_kb_id is not None else "chat_passthrough",
+        kb_id=body.rag_kb_id or "",
+        ip=request.client.host if request.client else "",
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
     return ChatResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
         created=int(time.time()),

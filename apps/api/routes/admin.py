@@ -294,6 +294,14 @@ def create_annotation(
         is_helpful=body.is_helpful,
         created_by=user.username,
     )
+    # 安全审计 M-8：标注写入入审计（查询原文不入审计，只记动作与 KB）
+    registry.record_audit(
+        actor=f"admin:{user.username}",
+        action="annotation_upsert",
+        kb_id=body.kb_id,
+        ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
     return ok({"id": entry.id, "kb_id": entry.kb_id, "query": entry.query})
 
 
@@ -377,6 +385,14 @@ def toggle_subscription(
     if registry.get_subscription(sub_id) is None:
         raise_http(404, "subscription_not_found", "订阅不存在")
     registry.set_subscription_enabled(sub_id, body.enabled)
+    # 安全审计 M-8：订阅变更入审计
+    registry.record_audit(
+        actor=f"admin:{request.state.admin_user.username}",
+        action="subscription_toggle",
+        kb_id="",
+        ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
     return ok(_subscription_out(registry.get_subscription(sub_id)))
 
 
@@ -387,6 +403,14 @@ def delete_subscription(sub_id: str, request: Request, registry: RegistryDep):
     if sub is None:
         raise_http(404, "subscription_not_found", "订阅不存在")
     registry.delete_subscription(sub_id)
+    # 安全审计 M-8：订阅删除入审计
+    registry.record_audit(
+        actor=f"admin:{request.state.admin_user.username}",
+        action="subscription_delete",
+        kb_id="",
+        ip=_client_ip(request),
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
     return ok({"deleted": True})
 
 
