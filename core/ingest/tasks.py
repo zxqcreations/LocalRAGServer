@@ -159,3 +159,31 @@ def enqueue_ingest(job_id: str):
         embed_task.si(job_id),  # type: ignore[attr-defined]
         index_task.si(job_id),  # type: ignore[attr-defined]
     ).apply_async()
+
+
+# ---------- URL 订阅爬取（docs/design/url-crawler.md；worker 加 -B 启动 beat） ----------
+
+
+@app.task(name="crawl.due")
+def crawl_due_task() -> list[str]:
+    """beat 周期任务：扫描到期订阅并逐个抓取（串行，按 URL 稳定序）。"""
+    from core.config import get_settings
+    from core.ingest.crawl import crawl_due
+    from core.storage.registry import Registry
+
+    settings = get_settings()
+    if settings.database_url is None:  # validator 已派生，fail-fast 兜底
+        raise RuntimeError("database_url 未配置")
+    registry = Registry(settings.database_url)
+    try:
+        return crawl_due(registry, settings)
+    finally:
+        registry.close()
+
+
+app.conf.beat_schedule = {
+    "crawl-due-every-10m": {
+        "task": "crawl.due",
+        "schedule": 600.0,  # 每 10 分钟扫描一次（设计：url-crawler.md）
+    },
+}

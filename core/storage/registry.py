@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, inspect, text
 from sqlalchemy.pool import NullPool
+from sqlalchemy.sql import Select
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from core.ingest.chunker import Chunk
@@ -83,6 +84,25 @@ class AdminSession(SQLModel, table=True):
     # 会话凭证本身；服务端只信任本列，会话 Cookie 仍 HttpOnly 且不含 token）
     csrf_token: str = ""
     expires_at: datetime
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class UrlSubscription(SQLModel, table=True):
+    """URL 订阅（docs/design/url-crawler.md）：周期性重抓 + 内容变更重索引。
+
+    调度游标契约：next_fetch_at 为 None 视为立即到期（新订阅）；
+    enabled=False 的订阅不出现在到期列表（暂停不删历史）。
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
+    kb_id: str = Field(index=True)
+    url: str
+    interval_hours: int = 24
+    last_content_hash: str = ""
+    last_fetched_at: datetime | None = None
+    next_fetch_at: datetime | None = None
+    enabled: bool = True
+    last_error: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -525,6 +545,89 @@ class Registry:
             return list(
                 s.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit))  # type: ignore[arg-type]
             )
+
+    # ---------- URL 订阅（url-crawler.md） ----------
+
+    def create_subscription(
+        self,
+        kb_id: str,
+        url: str,
+        interval_hours: int = 24,
+        next_fetch_at: datetime | None = None,
+    ) -> UrlSubscription:
+        sub = UrlSubscription(
+            kb_id=kb_id, url=url, interval_hours=interval_hours, next_fetch_at=next_fetch_at
+        )
+        with Session(self._engine) as s:
+            s.add(sub)
+            s.commit()
+            s.refresh(sub)
+        return sub
+
+    def get_subscription(self, subscription_id: str) -> UrlSubscription | None:
+        with Session(self._engine) as s:
+            return s.get(UrlSubscription, subscription_id)
+
+    def list_subscriptions(
+        self, kb_id: str | None = None, enabled_only: bool = False
+    ) -> list[UrlSubscription]:
+        with Session(self._engine) as s:
+            stmt: Select = select(UrlSubscription)
+            if kb_id is not None:
+                stmt = stmt.where(UrlSubscription.kb_id == kb_id)  # type: ignore[attr-defined]
+            if enabled_only:
+                stmt = stmt.where(UrlSubscription.enabled.is_(True))  # type: ignore[attr-defined]
+            return list(s.exec(stmt))
+
+    def list_due_subscriptions(self, now: datetime) -> list[UrlSubscription]:
+        """到期订阅：enabled 且（无游标或 next_fetch_at <= now），按 URL 稳定序。"""
+        with Session(self._engine) as s:
+            stmt = (
+                select(UrlSubscription)
+                .where(UrlSubscription.enabled.is_(True))  # type: ignore[attr-defined]
+                .where(  # type: ignore[attr-defined]
+                    (UrlSubscription.next_fetch_at.is_(None))  # type: ignore[attr-defined]
+                    | (UrlSubscription.next_fetch_at <= now)  # type: ignore[attr-defined]
+                )
+                .order_by(UrlSubscription.url)  # type: ignore[attr-defined]
+            )
+            return list(s.exec(stmt))
+
+    def set_subscription_enabled(self, subscription_id: str, enabled: bool) -> None:
+        with Session(self._engine) as s:
+            sub = s.get(UrlSubscription, subscription_id)
+            if sub is None:
+                raise LookupError(f"订阅不存在：{subscription_id}")
+            sub.enabled = enabled
+            s.add(sub)
+            s.commit()
+
+    def mark_subscription_fetched(
+        self, subscription_id: str, content_hash: str, now: datetime, next_fetch_at: datetime
+    ) -> None:
+        with Session(self._engine) as s:
+            sub = s.get(UrlSubscription, subscription_id)
+            if sub is None:
+                raise LookupError(f"订阅不存在：{subscription_id}")
+            sub.last_content_hash = content_hash
+            sub.last_fetched_at = now
+            sub.next_fetch_at = next_fetch_at
+            sub.last_error = ""
+            s.add(sub)
+            s.commit()
+
+    def mark_subscription_error(
+        self, subscription_id: str, error: str, now: datetime, next_fetch_at: datetime
+    ) -> None:
+        with Session(self._engine) as s:
+            sub = s.get(UrlSubscription, subscription_id)
+            if sub is None:
+                raise LookupError(f"订阅不存在：{subscription_id}")
+            sub.last_error = error
+            sub.last_fetched_at = now
+            sub.next_fetch_at = next_fetch_at
+            s.add(sub)
+            s.commit()
 
     # ---------- 摄取任务（状态机） ----------
 
