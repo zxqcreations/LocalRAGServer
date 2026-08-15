@@ -12,6 +12,12 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 from core.config import Settings
 
+# Windows 控制台代码页（cp1252/cp437）编码不了中文输出——显式切 UTF-8，
+# 与 configure_logging 的 _utf8_stream 同理（CI windows runner 实测崩溃点）
+_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if _reconfigure is not None:
+    _reconfigure(encoding="utf-8", errors="replace")
+
 
 def _check(condition: bool, message: str) -> None:
     """冒烟断言：失败立即终止并给出上下文（不用 assert，-O 优化模式下同样生效）。"""

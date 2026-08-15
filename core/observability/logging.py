@@ -11,13 +11,35 @@ _ALLOWED_KEYS = {
 }
 
 
+def _utf8_stream(stream):
+    """将文本流就地切换为 UTF-8 输出（errors=replace 兜底），原流返回。
+
+    Windows 控制台常见 cp1252/cp437 代码页无法编码中文日志，写入即抛
+    UnicodeEncodeError（CI windows runner 实测）；本项目目标平台为 Windows，
+    日志通道必须与代码页解耦。用 reconfigure 而非新建 TextIOWrapper：
+    包装会劫持原流（如 pytest 捕获对象）的 buffer 生命周期导致 teardown 崩溃。
+    无 reconfigure 的流（StringIO 等）原样返回。
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+    return stream
+
+
 def _filter_fields(logger, method_name, event_dict):
     """白名单过滤：未登记字段丢弃（防敏感数据误入日志）。"""
     return {k: v for k, v in event_dict.items() if k in _ALLOWED_KEYS}
 
 
 def configure_logging(level: str = "INFO") -> None:
-    logging.basicConfig(stream=sys.stdout, level=getattr(logging, level.upper(), logging.INFO))
+    out = _utf8_stream(sys.stdout)
+    # force=True：应用工厂多次调用（测试/多进程）时重新应用同一配置
+    logging.basicConfig(
+        stream=out, level=getattr(logging, level.upper(), logging.INFO), force=True
+    )
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -28,7 +50,7 @@ def configure_logging(level: str = "INFO") -> None:
         wrapper_class=structlog.make_filtering_bound_logger(
             getattr(logging, level.upper(), logging.INFO)
         ),
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(file=out),
     )
 
 

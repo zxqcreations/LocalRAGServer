@@ -47,3 +47,27 @@ def test_log_field_whitelist_filters_sensitive_keys():
         "duration_ms": 12,
     })
     assert filtered == {"event": "ok", "trace_id": "t1", "duration_ms": 12}
+
+
+def test_utf8_stream_reconfigures_in_place():
+    # Windows 代码页（cp1252/cp437）写中文抛 UnicodeEncodeError——就地切 UTF-8
+    import io
+
+    from core.observability.logging import _utf8_stream
+
+    raw = io.BytesIO()
+    narrow = io.TextIOWrapper(raw, encoding="cp1252")
+    assert _utf8_stream(narrow) is narrow  # 原流返回，不新建包装
+    narrow.write("中文日志：服务绑定 0.0.0.0")
+    narrow.flush()
+    assert raw.getvalue().decode("utf-8") == "中文日志：服务绑定 0.0.0.0"
+
+
+def test_utf8_stream_passthrough_without_reconfigure():
+    # 无 reconfigure 的流（StringIO/pytest 捕获对象）原样返回
+    import io
+
+    from core.observability.logging import _utf8_stream
+
+    plain = io.StringIO()
+    assert _utf8_stream(plain) is plain
