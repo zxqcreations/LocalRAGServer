@@ -16,7 +16,18 @@
 
 - ragas/langchain 系列**不进 uv.lock**：依赖树重且仅评测路径需要；
   CI 评测 job 不跑 RAGAS（LLM 评判需 GPU/本地服务）。
-- 安装：`uv pip install ragas langchain-openai`（文档记录，脚本启动时检查并给出指引）。
+- 安装（实测验证，2026-08-15）：
+  ```bash
+  # 代理对 pypi.org 转发故障时走国内镜像（直连可达）：
+  uv pip install ragas langchain-openai \
+    --index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/
+  # ragas 0.4.3 硬导入 langchain_community.chat_models.vertexai，
+  # 而 langchain-community 0.4.x 已移除该模块 → 必须降级：
+  uv pip install "langchain-community<0.4" \
+    --index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/
+  ```
+  验证：`uv run python -c "import ragas, torch; print(torch.cuda.is_available())"`
+  （ragas 导入成功且 torch GPU 完好——安装不破坏既有 GPU 栈）。
 
 ## 评测流程（eval/ragas_runner.py）
 
