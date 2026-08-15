@@ -41,6 +41,10 @@ _PUBLIC_PATHS = {"/health", "/healthz", "/readyz", "/docs", "/openapi.json", "/r
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
+# 安全审计 M-5：JSON 端点请求体上限（上传路径另有 max_upload_mb 校验）。
+# 与 TLS 部署的 nginx client_max_body_size 对齐（phase6-plan 附录 A 第 7 项）
+MAX_JSON_BODY_BYTES = 10 * 1024 * 1024  # 10MB
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
@@ -322,6 +326,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 仅 API 路径追踪（健康/探针/文档不生成 trace，observability.md §2）
         if not request.url.path.startswith(("/api/", "/v1/")):
             return await call_next(request)
+        # 安全审计 M-5：请求体上限（Content-Length 声明超限即拒，防大 body 打内存）
+        content_length = request.headers.get("content-length", "")
+        if content_length.isdigit() and int(content_length) > MAX_JSON_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content=err("body_too_large", "请求体超过上限（10MB）"),
+            )
         request.state.trace_id = uuid.uuid4().hex[:16]
         request.state.started_at = time.perf_counter()
         # structlog-integration.md D1：trace_id 进入日志上下文（contextvars 随调用链传播，

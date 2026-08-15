@@ -352,6 +352,17 @@ def test_chat_unknown_kb_404(client):
 # ---------- 审查回归：trace 最外层 + 限流事件（M1/M2a） ----------
 
 
+def test_json_body_size_limit(client):
+    # 安全审计 M-5：Content-Length 超限 → 413（防大 body 打内存）
+    big = "x" * (11 * 1024 * 1024)
+    resp = client.post(
+        "/api/v1/search",
+        json={"query": big, "kb_id": "k"},
+    )
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == "body_too_large"
+
+
 def test_auth_rejection_carries_trace_id(client):
     # 审查 M1：trace 中间件在最外层，认证拒绝路径同样带 X-Trace-Id
     resp = client.get("/api/v1/kb", headers={"Authorization": "Bearer wrong-key"})
