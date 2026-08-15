@@ -8,6 +8,7 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
 DEST = Path(__file__).resolve().parents[2] / "models" / "llamacpp"
@@ -16,7 +17,12 @@ UA = {"User-Agent": "LocalRAGServer-spike"}
 
 def fetch(url: str):
     """大文件下载不设总超时（仅连接超时），断点由调用方处理。"""
-    return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120)
+    # 资产 URL 来自 GitHub API 响应，白名单校验防 file:// 等非预期方案
+    if urlparse(url).scheme not in {"https", "http"}:
+        raise ValueError(f"仅允许 http(s) 下载：{url}")
+    return urllib.request.urlopen(  # nosec B310 -- scheme 白名单已校验
+        urllib.request.Request(url, headers=UA), timeout=120
+    )
 
 
 def main() -> int:

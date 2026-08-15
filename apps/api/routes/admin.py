@@ -92,8 +92,10 @@ def login(
         request.state.login_failed = body.username  # 中间件记录失败尝试
         raise_http(401, "admin_login_failed", "用户名或密码错误")
     session_id = secrets.token_urlsafe(32)
+    # 独立随机 CSRF token（安全审查 H-1：与 session_id 解耦，避免会话凭证孪生体落盘）
+    csrf_token = secrets.token_urlsafe(32)
     expiry = session_expiry()
-    registry.create_admin_session(user.id, hash_session(session_id), expiry)
+    registry.create_admin_session(user.id, hash_session(session_id), expiry, csrf_token)
     _session_cookie(request, session_id, expiry)
     registry.record_audit(
             actor=f"admin:{user.username}",
@@ -106,7 +108,7 @@ def login(
             "username": user.username,
             "role": user.role,
             "must_change_password": user.must_change_password,
-            "csrf_token": session_id,  # 状态变更请求以 X-CSRF-Token 头回传
+            "csrf_token": csrf_token,  # 状态变更请求以 X-CSRF-Token 头回传
         }
     )
 
@@ -145,6 +147,8 @@ def me(request: Request):
             "username": user.username,
             "role": user.role,
             "must_change_password": user.must_change_password,
+            # 多标签页自愈：应用启动/刷新时经此取回当前会话 token（代码审查 MEDIUM-1）
+            "csrf_token": getattr(request.state, "admin_csrf_token", ""),
         }
     )
 

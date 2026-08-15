@@ -72,6 +72,43 @@ def test_forced_password_change_flow(tmp_path):
         assert data2["must_change_password"] is False
 
 
+def test_csrf_token_is_independent_of_session_cookie(tmp_path):
+    # 安全审查 H-1：CSRF token 为独立随机值；会话 Cookie 值本身不再被接受
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)
+        token = data["csrf_token"]
+        cookie_value = client.cookies.get("rag_admin_session")
+        assert token and cookie_value
+        assert token != cookie_value  # 无凭证孪生体
+        # 用 Cookie 值冒充 CSRF token → 拒绝
+        resp = client.post(
+            "/admin/api/change-password",
+            json={"current_password": INITIAL_PW, "new_password": "whatever-pass-1"},
+            headers={"X-CSRF-Token": cookie_value},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "csrf_failed"
+        # 正确 token 可用
+        ok_resp = client.post(
+            "/admin/api/change-password",
+            json={"current_password": INITIAL_PW, "new_password": "new-secure-pass-1"},
+            headers={"X-CSRF-Token": token},
+        )
+        assert ok_resp.status_code == 200
+
+
+def test_me_returns_csrf_token_for_self_heal(tmp_path):
+    # 代码审查 MEDIUM-1：/me 下发当前会话 token，前端刷新/多标签页自愈
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        _set_initial_password(app)
+        data = _login(client)
+        me = client.get("/admin/api/me").json()["data"]
+        assert me["csrf_token"] == data["csrf_token"]
+
+
 def test_csrf_token_required_for_state_change(tmp_path):
     app = _make_app(tmp_path)
     with TestClient(app) as client:

@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import delete
+from sqlalchemy import delete, inspect, text
 from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
@@ -79,6 +79,9 @@ class AdminSession(SQLModel, table=True):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
     user_id: str = Field(index=True)
     session_hash: str = Field(index=True)  # 只存哈希（会话 Cookie 泄露不直接可用）
+    # 独立随机 CSRF token（安全审查 H-1：与 session_id 解耦，localStorage 落盘的不是
+    # 会话凭证本身；服务端只信任本列，会话 Cookie 仍 HttpOnly 且不含 token）
+    csrf_token: str = ""
     expires_at: datetime
     created_at: datetime = Field(default_factory=_utcnow)
 
@@ -138,6 +141,27 @@ class Registry:
         kwargs = {"poolclass": NullPool} if database_url.startswith("sqlite") else {}
         self._engine = create_engine(database_url, **kwargs)
         SQLModel.metadata.create_all(self._engine)
+        self._ensure_schema_extensions()
+
+    def _ensure_schema_extensions(self) -> None:
+        """启动期幂等 schema 自愈：create_all 只建表不补列，老库升级在此补列。
+
+        adminsession 等管理表由 create_all 管理（未入 alembic 迁移，见架构注记），
+        安全审查 H-1 新增的 csrf_token 列需要对既有库补列；SQLite/PG 的
+        ALTER ADD COLUMN 带 DEFAULT 均幂等，新库由 create_all 直接建出。
+        """
+        if "adminsession" not in inspect(self._engine).get_table_names():
+            return
+        columns = {c["name"] for c in inspect(self._engine).get_columns("adminsession")}
+        if "csrf_token" in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE adminsession ADD COLUMN "
+                    "csrf_token VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
 
     def session(self) -> Iterator[Session]:
         with Session(self._engine) as s:
@@ -467,10 +491,21 @@ class Registry:
             s.add(user)
             s.commit()
 
-    def create_admin_session(self, user_id: str, session_hash: str, expires_at: datetime) -> None:
+    def create_admin_session(
+        self,
+        user_id: str,
+        session_hash: str,
+        expires_at: datetime,
+        csrf_token: str = "",  # nosec B107 -- 非凭证字段的空串默认值（CSRF token 在登录时签发）
+    ) -> None:
         with Session(self._engine) as s:
             s.add(
-                AdminSession(user_id=user_id, session_hash=session_hash, expires_at=expires_at)
+                AdminSession(
+                    user_id=user_id,
+                    session_hash=session_hash,
+                    expires_at=expires_at,
+                    csrf_token=csrf_token,
+                )
             )
             s.commit()
 

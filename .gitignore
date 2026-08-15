@@ -36,3 +36,9 @@ docs/perf/mineru_out/**/*.json
 # 前端构建产物与依赖
 apps/web/node_modules/
 apps/web/dist/
+
+# E2E 运行产物（每次运行重建）
+apps/.e2e-data/
+apps/web/e2e/.auth/
+apps/web/test-results/
+apps/web/playwright-report/

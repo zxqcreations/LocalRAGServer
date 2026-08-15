@@ -12,7 +12,7 @@
   uv run python scripts/pg_drill.py
 """
 import os
-import subprocess
+import subprocess  # nosec B404 -- 仅运行仓库内 alembic 迁移（argv 来自代码内固定参数）
 import sys
 import time
 from pathlib import Path
@@ -27,7 +27,7 @@ OUT = Path(__file__).resolve().parents[1] / "docs" / "perf"
 
 def run_alembic(*args: str) -> None:
     env = {**os.environ, "RAG_DATABASE_URL": PG_URL}
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 -- sys.executable + alembic 模块，args 为代码内常量
         [sys.executable, "-m", "alembic", *args],
         cwd=Path(__file__).resolve().parents[1],
         env=env,

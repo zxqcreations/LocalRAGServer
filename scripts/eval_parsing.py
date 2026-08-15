@@ -10,7 +10,7 @@
 用法：uv run python scripts/eval_parsing.py [--sample 5]
 """
 import argparse
-import subprocess
+import subprocess  # nosec B404 -- 仅运行本地 mineru CLI（固定 argv，路径来自本地抽样文件）
 import sys
 import time
 from dataclasses import dataclass, field
@@ -52,7 +52,7 @@ def _sample_by_size(files: list[Path], n: int) -> list[Path]:
 
 def _run_mineru(pdf: Path, out_root: Path) -> tuple[float, float, str]:
     start = time.perf_counter()
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 B607 -- mineru 为本地解析工具，argv 不含外部输入
         ["mineru", "-p", str(pdf), "-o", str(out_root)],
         capture_output=True,
         text=True,

@@ -1,8 +1,41 @@
 /** 管理端 API 封装：JSON + CSRF 头 + 错误信封解析。 */
-let csrfToken = "";
+const CSRF_KEY = "rag_admin_csrf_token";
+
+function loadCsrfToken() {
+  // 隐私模式/沙箱 iframe 下 localStorage 可能抛 SecurityError，降级为空串
+  // （等同原内存态；会话刷新后经 /me 自愈重新取回）
+  try {
+    return localStorage.getItem(CSRF_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function storeCsrfToken(token) {
+  try {
+    localStorage.setItem(CSRF_KEY, token);
+  } catch {
+    /* 存储不可用时仅保留内存态（当前会话内仍可用） */
+  }
+}
+
+// CSRF token 持久化：页面刷新/多标签页仍能签发状态变更请求。
+// token 为独立随机值（安全审查 H-1，≠ 会话凭证），会话凭证仍是 HttpOnly Cookie；
+// 多标签页切换会话后经 /admin/api/me 自愈（App.vue refreshMe）
+let csrfToken = loadCsrfToken();
 
 export function setCsrfToken(token) {
   csrfToken = token;
+  storeCsrfToken(token);
+}
+
+export function clearCsrfToken() {
+  csrfToken = "";
+  try {
+    localStorage.removeItem(CSRF_KEY);
+  } catch {
+    /* 存储不可用则仅清内存态 */
+  }
 }
 
 async function request(method, path, body) {

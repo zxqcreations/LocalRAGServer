@@ -20,15 +20,19 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { api } from "./api.js";
+import { api, clearCsrfToken, setCsrfToken } from "./api.js";
 
 const router = useRouter();
 const me = ref(null);
 
 async function refreshMe() {
   try {
-    me.value = await api.me();
+    const data = await api.me();
+    me.value = data;
+    // 多标签页自愈（代码审查 MEDIUM-1）：以当前会话的 token 覆盖本地存储
+    setCsrfToken(data.csrf_token || "");
   } catch {
+    clearCsrfToken();
     me.value = null;
     if (router.currentRoute.value.path !== "/login") router.push("/login");
   }
@@ -36,6 +40,7 @@ async function refreshMe() {
 
 async function doLogout() {
   await api.logout();
+  clearCsrfToken();
   me.value = null;
   router.push("/login");
 }

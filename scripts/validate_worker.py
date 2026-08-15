@@ -5,7 +5,7 @@
 
 用法：uv run python scripts/validate_worker.py
 """
-import subprocess
+import subprocess  # nosec B404 -- 仅启动仓库内 worker 脚本（sys.executable + 固定路径，无外部输入）
 import sys
 import time
 from pathlib import Path
@@ -25,7 +25,7 @@ def main() -> int:
     log_path = Path("data") / "worker_validate.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("w", encoding="utf-8", errors="replace")
-    worker = subprocess.Popen(
+    worker = subprocess.Popen(  # nosec B603 -- argv 固定（sys.executable + 仓库脚本路径）
         [sys.executable, "scripts/worker.py"],
         stdout=log_file,
         stderr=subprocess.STDOUT,

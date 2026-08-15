@@ -5,7 +5,7 @@
 """
 import argparse
 import re
-import subprocess
+import subprocess  # nosec B404 -- 仅运行本地 llama-cli 基准（argv 全部来自仓库内常量与 argparse 数值）
 import sys
 from pathlib import Path
 
@@ -37,7 +37,7 @@ def main() -> int:
         "--no-display-prompt",
     ]
     print(f"运行：llama-cli -ngl {args.ngl} -n {args.tokens}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)  # nosec B603 -- argv 固定（llama-cli + 仓库内模型路径）
     output = result.stderr + result.stdout
     matches = _TOKEN_RE.findall(output)
     if matches:

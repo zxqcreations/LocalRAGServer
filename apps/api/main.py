@@ -23,7 +23,7 @@ from apps.api.routes.admin import COOKIE_NAME
 from apps.api.schemas import err
 from core.config import Settings, get_settings
 from core.generation.llm import ChatClient
-from core.observability.logging import configure_logging
+from core.observability.logging import configure_logging, emit_alert
 from core.observability.metrics import MetricsCollector
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
@@ -153,6 +153,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _check("embedder", _embedder)
         _check("llm", _llm)
         critical_down = [k for k in ("database", "qdrant") if checks[k] != "ok"]
+        # 边沿触发（代码审查 MEDIUM-3）：探针高频轮询，只在 ok→down 转换时告警，
+        # 恢复时发 info 回执；持续 down 不重复刷告警（去重留 Phase 6 Alertmanager）
+        was_ok = getattr(app.state, "readiness_was_ok", True)
+        if critical_down:
+            if was_ok:
+                emit_alert("readiness_critical_down", ",".join(critical_down), level="error")
+                app.state.readiness_was_ok = False
+        elif not was_ok:
+            emit_alert("readiness_recovered", "all", level="info")
+            app.state.readiness_was_ok = True
         status = 503 if critical_down else 200
         return JSONResponse(
             status_code=status,
@@ -263,6 +273,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if admin_user is not None:
                     request.state.admin_user = admin_user
                     request.state.admin_session_hash = session_record.session_hash
+                    # 独立随机 CSRF token（安全审查 H-1），/me 经此下发供前端自愈
+                    request.state.admin_csrf_token = session_record.csrf_token
         def _apply_session_cookie(response, req: Request):
             # 会话 Cookie 下发/清除（登录/登出路由通过 request.state 通知）
             if hasattr(req.state, "new_session_cookie"):
@@ -282,7 +294,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # CSRF：状态变更请求校验 token（登录响应下发 csrf_token，前端以 X-CSRF-Token 头回传）
         if request.method in {"POST", "PUT", "DELETE"} and not request.url.path.endswith("/login"):
             token = request.headers.get("X-CSRF-Token", "")
-            if not token or not compare_digest(token, session_id):
+            # H-1：与"当前会话记录的独立 token"比较，而非 cookie 里的 session_id
+            expected = getattr(request.state, "admin_csrf_token", "")
+            if not token or not expected or not compare_digest(token, expected):
                 return JSONResponse(
                     status_code=403, content=err("csrf_failed", "CSRF token 校验失败")
                 )

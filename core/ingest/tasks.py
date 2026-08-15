@@ -6,6 +6,7 @@ from celery import Celery, chain
 
 from core.config import get_settings
 from core.ingest.pipeline import MAX_ATTEMPTS, IngestPipeline
+from core.observability.logging import emit_alert
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.search import SearchService
 from core.storage.registry import Registry
@@ -75,6 +76,7 @@ def _handle_failure(self, job_id: str, pipeline: IngestPipeline, exc: Exception)
     pipeline.mark_failed(job_id, str(exc))
     job = pipeline.registry.get_job(job_id)
     if job is not None and job.attempt >= MAX_ATTEMPTS:
+        emit_alert("ingest_dlq_exhausted", job.id, level="error")
         raise  # 超过重试上限（attempt 字段承载 DLQ 标记，管理端人工处置）
     raise self.retry(exc=exc) from exc
 

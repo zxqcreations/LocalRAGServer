@@ -58,8 +58,31 @@ def test_admin_session_lifecycle(tmp_path):
     registry = Registry(f"sqlite:///{tmp_path / 'r.db'}")
     user = registry.ensure_admin_user("admin", hash_password("p"))
     session_hash = hash_session("session-id-1")
-    registry.create_admin_session(user.id, session_hash, session_expiry())
+    # 安全审查 H-1：独立随机 CSRF token 随会话持久化
+    registry.create_admin_session(
+        user.id, session_hash, session_expiry(), csrf_token="csrf-t-1"
+    )
     found = registry.find_admin_session(session_hash)
     assert found is not None and found.user_id == user.id
+    assert found.csrf_token == "csrf-t-1"
     registry.revoke_admin_session(session_hash)
     assert registry.find_admin_session(session_hash) is None
+
+
+def test_schema_self_heal_adds_csrf_token_column(tmp_path):
+    # 老库升级：adminsession 表缺 csrf_token 列时，Registry 初始化补列（幂等）
+    from sqlalchemy import create_engine, inspect, text
+
+    db = tmp_path / "old.db"
+    engine = create_engine(f"sqlite:///{db}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE adminsession ("
+                "id VARCHAR PRIMARY KEY, user_id VARCHAR, session_hash VARCHAR, "
+                "expires_at DATETIME, created_at DATETIME)"
+            )
+        )
+    Registry(f"sqlite:///{db}")  # 触发 create_all + 自愈
+    columns = {c["name"] for c in inspect(engine).get_columns("adminsession")}
+    assert "csrf_token" in columns
