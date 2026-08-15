@@ -97,6 +97,14 @@ def test_summarize_averages_metrics():
     assert summary["faithfulness"] == pytest.approx(0.65)  # (0.6 + 0.7) / 2
 
 
+def test_run_eval_on_record_callback_per_entry():
+    # 长评测逐条落盘：每条完成即回调（中断续跑的明细来源）
+    seen = []
+    records = run_eval(_ENTRIES, _search, _generate, _StubJudge(), on_record=seen.append)
+    assert [r.id for r in seen] == ["qa-1", "qa-2"]
+    assert len(records) == 2
+
+
 def test_summarize_rejects_empty():
     try:
         summarize([])
@@ -154,3 +162,29 @@ def test_check_ragas_deps_reports_missing(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     missing = check_ragas_deps()
     assert set(missing) == {"ragas", "langchain_openai"}
+
+
+def test_local_embeddings_uses_injected_model(monkeypatch):
+    # 嵌入协议：bge-m3 本地模型（与生产同源）；sys.modules 注入 fake（CI 无
+    # sentence-transformers 依赖也可跑）
+    import sys
+    import types
+
+    import numpy as np
+
+    from eval.ragas_runner import _LocalEmbeddings
+
+    class FakeST:
+        def __init__(self, model_name):
+            assert model_name == "BAAI/bge-m3"
+
+        def encode(self, texts, normalize_embeddings=False, batch_size=16):
+            assert normalize_embeddings is True
+            return np.array([[1.0, 0.0] for _ in texts])
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FakeST
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    emb = _LocalEmbeddings()
+    assert emb.embed_query("x") == [1.0, 0.0]
+    assert emb.embed_documents(["a", "b"]) == [[1.0, 0.0], [1.0, 0.0]]

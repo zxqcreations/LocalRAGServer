@@ -13,7 +13,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from eval.dataset import QAEntry
 
@@ -26,6 +26,23 @@ TOLERANCE = 0.05  # 基线容差（与 run_retrieval 同机制）
 
 SearchFn = Callable[[str, str], list[str]]  # (question, kb_type) -> contexts
 GenerateFn = Callable[[str, list[str]], str]  # (question, contexts) -> answer
+
+# langchain_core 为可选评测依赖（不进 lock）；CI/无依赖环境用占位基类
+# （build_judge 前 check_ragas_deps 已拦截，占位类不会被实际使用）。
+# TYPE_CHECKING 分支供 pyright 解析真类型，else 为运行时兜底（标准懒依赖模式）。
+if TYPE_CHECKING:
+    from langchain_core.embeddings import Embeddings
+else:  # pragma: no cover - 运行时兜底
+    try:
+        from langchain_core.embeddings import Embeddings
+    except ImportError:
+
+        class Embeddings:  # type: ignore[no-redef]
+            def embed_documents(self, texts):  # type: ignore[empty-body]
+                raise NotImplementedError
+
+            def embed_query(self, text):  # type: ignore[empty-body]
+                raise NotImplementedError
 
 
 class Judge(Protocol):
@@ -59,9 +76,17 @@ def check_ragas_deps() -> list[str]:
 
 
 def run_eval(
-    entries: list[QAEntry], search_fn: SearchFn, generate_fn: GenerateFn, judge: Judge
+    entries: list[QAEntry],
+    search_fn: SearchFn,
+    generate_fn: GenerateFn,
+    judge: Judge,
+    on_record=None,
 ) -> list[EvalRecord]:
-    """逐条评测：检索 → 生成 → 评判，返回与输入同序的记录列表。"""
+    """逐条评测：检索 → 生成 → 评判，返回与输入同序的记录列表。
+
+    on_record(record)：每条完成后回调（长评测逐条落盘——中断后可 --offset 续跑，
+    已完成的明细不丢失）。
+    """
     records: list[EvalRecord] = []
     for entry in entries:
         contexts = search_fn(entry.question, entry.kb_type)
@@ -70,15 +95,16 @@ def run_eval(
         missing = [m for m in METRICS if m not in metrics]
         if missing:
             raise ValueError(f"{entry.id}: 评判结果缺少指标 {missing}")
-        records.append(
-            EvalRecord(
-                id=entry.id,
-                kb_type=entry.kb_type,
-                question=entry.question,
-                answer=answer,
-                metrics={m: float(metrics[m]) for m in METRICS},
-            )
+        record = EvalRecord(
+            id=entry.id,
+            kb_type=entry.kb_type,
+            question=entry.question,
+            answer=answer,
+            metrics={m: float(metrics[m]) for m in METRICS},
         )
+        records.append(record)
+        if on_record is not None:
+            on_record(record)
     return records
 
 
@@ -123,16 +149,41 @@ def load_baseline(path: Path = BASELINE_PATH) -> dict[str, float]:
         return json.load(f)
 
 
-def build_judge():
-    """真实 RAGAS 评判链（懒加载）：LLM 评判 + 嵌入均指向本地服务。
+class _LocalEmbeddings(Embeddings):
+    """本机 bge-m3 嵌入（sentence-transformers），继承 langchain Embeddings 协议。
 
-    base_url 取环境变量 RAGAS_LLM_BASE_URL（默认 http://127.0.0.1:9001/v1，
-    llama-server）；嵌入用本机 sentence-transformers（bge-m3）。
+    实测注记：llama-server 默认不支持 /v1/embeddings（501），RAGAS 上下文指标
+    的嵌入必须走本机模型——与生产检索同源（bge-m3），不引入第二套嵌入。
+    """
+
+    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+        from sentence_transformers import SentenceTransformer
+
+        self._model = SentenceTransformer(model_name)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [
+            vec.tolist()
+            for vec in self._model.encode(texts, normalize_embeddings=True, batch_size=16)
+        ]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._model.encode(
+            [text], normalize_embeddings=True
+        )[0].tolist()
+
+
+def build_judge():
+    """真实 RAGAS 评判链（懒加载）：LLM 评判指向本地 llama-server，
+    嵌入用本机 bge-m3（sentence-transformers，与生产同源）。
+
+    base_url 取环境变量 RAGAS_LLM_BASE_URL（默认 http://127.0.0.1:9001/v1）。
     """
     import os
 
     # ragas/langchain 为可选评测依赖（不进 lock，docs/design/ragas-eval.md）
-    from langchain_openai import ChatOpenAI, OpenAIEmbeddings  # type: ignore[import-not-found]
+    from langchain_openai import ChatOpenAI  # type: ignore[import-not-found]
+    from pydantic import SecretStr
     from ragas import evaluate  # type: ignore[import-not-found]
     from ragas.metrics import (  # type: ignore[import-not-found]
         answer_relevancy,
@@ -143,9 +194,10 @@ def build_judge():
     from ragas.run_config import RunConfig  # type: ignore[import-not-found]
 
     base_url = os.environ.get("RAGAS_LLM_BASE_URL", "http://127.0.0.1:9001/v1")
-    llm = ChatOpenAI(model="qwen3-8b", base_url=base_url, api_key="local")
-    embeddings = OpenAIEmbeddings(model="bge-m3", base_url=base_url, api_key="local")
-    run_config = RunConfig(max_workers=1, timeout=300)
+    llm = ChatOpenAI(model="qwen3-8b", base_url=base_url, api_key=SecretStr("local"))
+    embeddings = _LocalEmbeddings()
+    # max_workers=3：llama-server 4 slots 支持并发评判（单条 ~1min → 3 并行）
+    run_config = RunConfig(max_workers=3, timeout=300)
 
     class RagasJudge:
         def judge(self, question, answer, contexts, reference):
@@ -171,7 +223,7 @@ def build_judge():
                 embeddings=embeddings,
                 run_config=run_config,
             )
-            row = result.to_pandas().iloc[0]
+            row = result.to_pandas().iloc[0]  # type: ignore[attr-defined]  # ragas Result 运行时提供
             return {m: float(row[m]) for m in METRICS}
 
     return RagasJudge()
@@ -181,6 +233,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="RAGAS 评估闭环")
     parser.add_argument("--check-baseline", action="store_true", help="对照基线门禁")
     parser.add_argument("--baseline", type=Path, default=BASELINE_PATH)
+    # 分批执行：单批次限时长（LLM 评判耗时），中断后可用 --offset 续跑
+    parser.add_argument("--offset", type=int, default=0, help="跳过前 N 条（续跑起点）")
+    parser.add_argument("--limit", type=int, default=0, help="最多评测 N 条（0 = 全部）")
     args = parser.parse_args()
 
     missing = check_ragas_deps()
@@ -201,7 +256,7 @@ def main() -> int:
     from fastapi.testclient import TestClient
 
     with TestClient(app) as _client:
-        entries = load_qa()
+        entries = load_qa()[args.offset : args.offset + args.limit if args.limit else None]
         judge = build_judge()
         # 评测 KB 命名契约：eval-<kb_type>（fixtures 入库脚本按此命名）
         kb_ids = {
@@ -218,10 +273,24 @@ def main() -> int:
 
             return app.state.chat_client.chat(build_rag_messages(question, contexts)).content
 
-        records = run_eval(entries, _search, _generate, judge)
+        batch = f"-{args.offset}" if args.offset else ""
+        report_path = REPORT_ROOT / f"ragas-eval{batch}-{_date_stamp()}.json"
+        detail_path = report_path.with_suffix(".jsonl")
+
+        # 逐条落盘（长评测中断后可 --offset 续跑，已完成明细不丢失）
+        def _append(record: EvalRecord) -> None:
+            with detail_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {"id": record.id, "kb_type": record.kb_type, **record.metrics},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        records = run_eval(entries, _search, _generate, judge, on_record=_append)
         summary = summarize(records)
-        report_path = REPORT_ROOT / f"ragas-eval-{_date_stamp()}.json"
-        write_report(records, summary, report_path)
+        report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"评测完成：{len(records)} 条 → {report_path}")
         for metric, value in summary.items():
             print(f"  {metric}: {value:.3f}")

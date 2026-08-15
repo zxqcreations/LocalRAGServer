@@ -17,6 +17,7 @@
 | 6 | 安全审查 | security-reviewer | **触发区强制**：认证/上传/DB/文件系统/外部 API/密钥管理 |
 | 7 | 性能基准 | docs/perf/ 脚本 | 对照架构 §8.4 不劣化 |
 | 8 | 架构一致性 | 每轮审计五查 | 无偏离（偏离须走 ADR） |
+| 9 | RAGAS 质量基线 | eval/ragas_runner.py --check-baseline | 四指标不低于基线-0.05（docs/perf/ragas-baseline.json，2026-08-15 首测：faithfulness 0.872 / answer_relevancy 0.748 / context_precision 0.925 / context_recall 0.98） |
 
 ## 2. 阶段门禁（Phase 0-6）
 
