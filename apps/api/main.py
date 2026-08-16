@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from secrets import compare_digest
 
@@ -10,6 +11,8 @@ import structlog
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 
 from apps.api.errors import (
     ACL_DENIED,
@@ -28,7 +31,7 @@ from core.observability.metrics import MetricsCollector
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
-from core.security.acl import AclDeniedError, resolve_allowed_kb_ids
+from core.security.acl import AclDeniedError, AllowedKbs, resolve_allowed_kb_ids
 from core.security.admin import generate_initial_password, hash_password, hash_session
 from core.security.ratelimit import build_limiter
 from core.storage.registry import Registry
@@ -44,6 +47,15 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # 安全审计 M-5：JSON 端点请求体上限（上传路径另有 max_upload_mb 校验）。
 # 与 TLS 部署的 nginx client_max_body_size 对齐（phase6-plan 附录 A 第 7 项）
 MAX_JSON_BODY_BYTES = 10 * 1024 * 1024  # 10MB
+
+# MCP streamable HTTP（ADR-006 v1.1）：请求级 ACL 经 contextvar 传递——
+# auth_middleware 认证后写入，MCP 工具调用的 resolver 读取（与 REST 同语义）
+_mcp_allowed_kbs: ContextVar[AllowedKbs] = ContextVar("mcp_allowed_kbs", default="*")
+# MCP 工具调用审计主体（Key id 或 master；stdio 通道无中间件，记 mcp:stdio）
+_mcp_actor: ContextVar[str] = ContextVar("mcp_actor", default="")
+# MCP 挂载 fail-closed 哨兵：仅 auth_middleware 认证成功后置位——
+# 未置位即拒（安全审查 L：防未来绕过路径静默拿到 "*" 默认值）
+_mcp_armed: ContextVar[bool] = ContextVar("mcp_armed", default=False)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -103,12 +115,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.llm_model,
             settings.llm_timeout,
         )
-        try:
-            yield
-        finally:
-            app.state.chat_client.close()
-            app.state.vector_store.close()
-            app.state.registry.close()
+        # MCP streamable HTTP 挂载（ADR-006 v1.1：ACL 注入 + 本地路径拒绝）
+        from apps.mcp.server import build_mcp_server
+
+        mcp_server = build_mcp_server(
+            app.state.registry,
+            app.state.search_service,
+            settings,
+            # lambda 包装：ContextVar.get 为带默认参的重载，裸引用不满足 Callable[[], T]
+            allowed_resolver=lambda: _mcp_allowed_kbs.get(),  # 请求级 ACL（中间件写入）
+            actor_resolver=lambda: _mcp_actor.get(),  # 审计主体（key id / master）
+            allow_local_paths=False,  # 审计 H-2：远程通道拒绝本地路径
+        )
+        # 安全审查 H-1：会话 ID 属敏感句柄（可恢复会话），SDK 默认 INFO 日志
+        # 会打印明文 ID——抑制至 WARNING；闲置会话 30 分钟回收防僵尸会话堆积
+        import logging
+
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+        logging.getLogger("mcp.server.streamable_http_manager").setLevel(logging.WARNING)
+        _mcp_manager = StreamableHTTPSessionManager(
+            app=mcp_server, json_response=True, session_idle_timeout=1800
+        )
+        app.state.mcp_manager = _mcp_manager
+        # SDK 契约：run() 为异步上下文管理器（anyio 任务组），随应用生命周期启停；
+        # 同一实例仅可 run() 一次——create_app 每次调用重建，无复用风险
+        async with _mcp_manager.run():
+            try:
+                yield
+            finally:
+                app.state.chat_client.close()
+                app.state.vector_store.close()
+                app.state.registry.close()
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
@@ -126,6 +164,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def healthz():
         """存活探针：进程在即 ok（审计 ARC-010）。"""
         return {"success": True, "data": {"status": "ok"}, "error": None, "meta": None}
+
+    # MCP streamable HTTP（ADR-006 v1.1）：以原始 ASGI 挂载而非 FastAPI 端点——
+    # SDK 自行发送响应，端点包装会再产生第二响应（依赖 BaseHTTPMiddleware 静默
+    # 丢弃，审查 M：库内部细节，升级即碎）；挂载路径下响应仅由 SDK 发出。
+    # 认证/限流/请求体上限中间件链原样包裹挂载。
+
+    async def _mcp_asgi(scope, receive, send):
+        manager = app.state.mcp_manager
+        if not _mcp_armed.get():  # fail-closed 哨兵（安全审查 L）
+            _logger.error("mcp_unarmed", detail="MCP 请求未经过认证中间件")
+            await _mcp_reject(send, 500, "internal_error", "服务内部错误，详情见服务端日志")
+            return
+        # 安全审查 M：有界读体——chunked 请求无 Content-Length，中间件长度
+        # 检查被绕过，此处按实际字节数钳制（读完后以单条消息重放给 SDK）
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                continue
+            body.extend(message.get("body", b""))
+            if len(body) > MAX_JSON_BODY_BYTES:
+                await _mcp_reject(send, 413, "body_too_large", "请求体超过上限（10MB）")
+                return
+            if not message.get("more_body", False):
+                break
+        delivered = False
+
+        async def _replay_receive():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await manager.handle_request(scope, _replay_receive, send)
+
+    async def _mcp_reject(send, status: int, code: str, message: str) -> None:
+        payload = json.dumps(err(code, message)).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(payload)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
+
+    app.mount("/mcp", _mcp_asgi)
 
     @app.get("/readyz", tags=["运维"])
     def readyz():
@@ -191,6 +280,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ---- 认证与 ACL 强制点（审计 F-01/F-13：单一入口，服务端推导允许的 KB 集合） ----
 
+    def _arm_mcp(request: Request, actor: str) -> None:
+        """MCP 通道认证后置位：哨兵 + SDK 会话归属绑定（仅 /mcp 路径）。
+
+        scope["user"] 写入 AuthenticatedUser——SDK 会话管理器据此把会话绑定到
+        认证主体：跨 Key 恢复/终止会话即拒，响应与「会话不存在」一致
+        （安全审查 H-1：不绑定则任何持 Key 者可劫持/终止他人会话）。
+        """
+        if not request.url.path.startswith("/mcp"):
+            return
+        _mcp_armed.set(True)
+        # token 字段刻意留空（nosec B106）：会话绑定仅用 client_id 比对，
+        # 任何密钥材料不得进入 scope（SDK 会以日志/回显方式暴露 scope 内容）
+        request.scope["user"] = AuthenticatedUser(
+            AccessToken(token="", client_id=actor, scopes=[])  # nosec B106
+        )
+
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
         if request.url.path.startswith("/admin/"):
@@ -221,6 +326,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if compare_digest(raw_key, settings.api_key):
             request.state.allowed_kbs = "*"
             request.state.actor = "master"
+            _mcp_allowed_kbs.set("*")  # MCP HTTP：请求级 ACL（与 REST 同语义）
+            _mcp_actor.set("master")
+            _arm_mcp(request, "master")
             if not app.state.limiter.allow("key:master", 120, 2.0):
                 _logger.warning("rate_limited", actor="key:master", limit="120/2s")
                 return JSONResponse(
@@ -234,6 +342,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _logger.warning("auth_failed", detail=f"invalid_api_key ip:{ip}")
             return JSONResponse(status_code=401, content=err(AUTH_INVALID, "API Key 无效"))
         request.state.allowed_kbs = resolve_allowed_kb_ids(json.loads(record.kb_acl))
+        _mcp_allowed_kbs.set(request.state.allowed_kbs)  # MCP HTTP：请求级 ACL
+        _mcp_actor.set(record.id)  # MCP HTTP：审计主体
+        _arm_mcp(request, record.id)
         request.state.api_key_record = record
         request.state.actor = record.id
         if not app.state.limiter.allow(f"key:{record.id}", 120, 2.0):
@@ -326,8 +437,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def trace_middleware(request: Request, call_next):
-        # 仅 API 路径追踪（健康/探针/文档不生成 trace，observability.md §2）
-        if not request.url.path.startswith(("/api/", "/v1/")):
+        # 仅 API/MCP 路径追踪（健康/探针/文档不生成 trace，observability.md §2；
+        # /mcp 纳入：MCP 工具调用审计需 trace_id 关联，body 上限同样生效）
+        if not request.url.path.startswith(("/api/", "/v1/", "/mcp")):
             return await call_next(request)
         # 安全审计 M-5：请求体上限（Content-Length 声明超限即拒，防大 body 打内存）
         content_length = request.headers.get("content-length", "")

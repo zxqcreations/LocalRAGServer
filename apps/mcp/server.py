@@ -3,21 +3,27 @@
 工具描述嵌入 KB 目录与使用示例，提升 Agent 工具选择准确率（quality.md Phase 3 门）。
 ACL：stdio 本机通道为主 Key 语义（"*"，审计 F-11 本地特权通道）；
 streamable HTTP 由挂载方（FastAPI 中间件）注入请求级 ACL。
+审计：每次成功工具调用落 record_audit（mcp_* 独立动作码，与 REST 同库同口径）。
 """
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import mcp.types as types
+import structlog
 from mcp.server import Server
 
 from core.config import Settings
 from core.ingest.importer import _content_hash
+from core.observability.logging import get_logger
 from core.retrieval.search import SearchService
 from core.security.acl import AllowedKbs, require_kb_access
 from core.storage.registry import Registry
 
+_logger = get_logger("local_rag_server.mcp")
+
 AllowedResolver = Callable[[], AllowedKbs]
+ActorResolver = Callable[[], str]
 
 
 def build_mcp_server(
@@ -26,16 +32,30 @@ def build_mcp_server(
     settings: Settings,
     allowed_resolver: AllowedResolver | None = None,
     allow_local_paths: bool = True,
+    actor_resolver: ActorResolver | None = None,
 ) -> Server:
     """构建 MCP Server；allowed_resolver 注入请求级 ACL（默认全权限，stdio 语义）。
 
     allow_local_paths：本地文件摄取开关（审计 H-2）——stdio 本机通道为 True；
     streamable HTTP 挂载时必须传 False（远程通道拒绝本地路径，防任意文件读取）。
+
+    actor_resolver：审计主体注入——HTTP 通道为 Key id 或 master，
+    stdio 无请求上下文，记 mcp:stdio。
     """
     server = Server("local-rag-server")
 
     def _allowed() -> AllowedKbs:
         return allowed_resolver() if allowed_resolver else "*"
+
+    def _audit(action: str, kb_id: str) -> None:
+        """工具调用审计：成功路径落 mcp_* 动作码（越权拒绝与 REST 403 同口径不落审计）。
+
+        trace_id 取自 structlog contextvars——HTTP 通道由 trace_middleware
+        （已覆盖 /mcp）绑定，stdio 通道为空串。
+        """
+        actor = actor_resolver() if actor_resolver else "mcp:stdio"
+        trace_id = structlog.contextvars.get_contextvars().get("trace_id", "")
+        registry.record_audit(actor=actor, action=action, kb_id=kb_id, trace_id=trace_id)
 
     def _kb_names() -> str:
         kbs = registry.list_kbs()
@@ -134,6 +154,7 @@ def build_mcp_server(
                 if allowed != "*":
                     kbs = [k for k in kbs if k.id in allowed]
                 text = "\n".join(f"- {k.name}（id={k.id}，类型={k.kb_type}）" for k in kbs)
+                _audit("mcp_list_kbs", "")
                 return types.CallToolResult(
                     content=[types.TextContent(type="text", text=text or "（无可访问知识库）")]
                 )
@@ -143,6 +164,7 @@ def build_mcp_server(
                 results = search_service.search(
                     kb.id, arguments["query"], int(arguments.get("top_k", 5))
                 )
+                _audit("mcp_search", kb.id)
                 if not results:
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text="（无检索结果）")]
@@ -160,6 +182,7 @@ def build_mcp_server(
                 results = search_service.search(
                     kb.id, arguments["question"], settings.rerank_top_k
                 )
+                _audit("mcp_ask", kb.id)
                 if not results:
                     return types.CallToolResult(
                         content=[types.TextContent(type="text", text="知识库中未找到相关内容。")]
@@ -212,6 +235,7 @@ def build_mcp_server(
                 from core.ingest.tasks import enqueue_ingest
 
                 enqueue_ingest(job.id)
+                _audit("mcp_ingest", kb.id)  # 审计在实际入队完成后（审查 L：先做事后记账）
                 return types.CallToolResult(
                     content=[
                         types.TextContent(type="text", text=f"已入队：job_id={job.id}")
@@ -228,6 +252,10 @@ def build_mcp_server(
                             )
                         ]
                     )
+                # 审计 M-7：任务归属 KB 必须落在调用方 ACL
+                # （跨库 job_id 探测显式拒绝，与 REST 403 语义一致）
+                require_kb_access(job.kb_id, _allowed())
+                _audit("mcp_status", job.kb_id)
                 text = (
                     f"job={job.id} · 阶段={job.stage} · 重试={job.attempt}"
                     + (f" · 错误={job.error}" if job.error else "")
@@ -245,8 +273,22 @@ def build_mcp_server(
                 content=[types.TextContent(type="text", text=str(exc))], is_error=True
             )
         except PermissionError as exc:
+            # 安全审查 L：越权拒绝落审计（探针证据）；kb 原文截断 64 防超长注入
+            if name == "get_document_status":
+                job = registry.get_job(arguments.get("job_id", ""))
+                kb_id = job.kb_id if job is not None else ""
+            else:
+                kb_id = str(arguments.get("kb", ""))[:64]
+            _audit(f"mcp_{name}_denied", kb_id)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=str(exc))], is_error=True
+            )
+        except Exception:
+            # 安全审查 M：内部错误不回显细节（LLM 端点/文件路径等），只进服务端日志
+            _logger.exception("mcp_tool_error", detail=f"tool={name}")
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text="工具执行失败（详情见服务端日志）")],
+                is_error=True,
             )
 
     server.add_request_handler("tools/list", types.RequestParams, _handle_list_tools)

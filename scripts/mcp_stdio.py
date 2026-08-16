@@ -5,11 +5,13 @@ Claude Code 配置示例（mcpServers）：
   {"local-rag": {"command": "uv", "args": ["run", "python", "scripts/mcp_stdio.py"]}}
 """
 import asyncio
+import sys
 
 from mcp.server.stdio import stdio_server
 
 from apps.mcp.server import build_mcp_server
 from core.config import get_settings
+from core.observability.logging import configure_logging
 from core.retrieval.embeddings import build_embedder
 from core.retrieval.rerank import build_reranker
 from core.retrieval.search import SearchService
@@ -18,6 +20,8 @@ from core.storage.vector import QdrantVectorStore
 
 
 async def main() -> None:
+    # stdout 是 MCP 协议通道——结构化日志必须走 stderr，否则污染协议流
+    configure_logging(stream=sys.stderr)
     settings = get_settings()
     if settings.database_url is None:
         raise RuntimeError("database_url 未配置")

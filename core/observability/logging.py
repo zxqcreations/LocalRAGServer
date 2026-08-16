@@ -41,8 +41,9 @@ def _filter_fields(logger, method_name, event_dict):
     return filtered
 
 
-def configure_logging(level: str = "INFO") -> None:
-    out = _utf8_stream(sys.stdout)
+def configure_logging(level: str = "INFO", stream=None) -> None:
+    # stream 可注入（MCP stdio 进程传 sys.stderr——stdout 是协议通道，日志不得混入）
+    out = _utf8_stream(stream if stream is not None else sys.stdout)
     # force=True：应用工厂多次调用（测试/多进程）时重新应用同一配置
     logging.basicConfig(
         stream=out, level=getattr(logging, level.upper(), logging.INFO), force=True

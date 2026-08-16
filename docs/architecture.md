@@ -10,7 +10,7 @@
 | 维度 | 目标 |
 |---|---|
 | 服务定位 | 本地部署的 **RAG 基础设施**，非应用：向上对 Agent / 应用暴露检索与生成能力，不绑定具体业务 |
-| 接入方式 | MCP 协议（**v1.0 已实现**：stdio transport 5 工具；streamable HTTP 为 v1.1 功能项，见 ADR-006）+ OpenAI 兼容 REST + Web 管理端（Phase 4） |
+| 接入方式 | MCP 协议（stdio transport 5 工具，v1.0；streamable HTTP 于 v1.1 上线，见 ADR-006）+ OpenAI 兼容 REST + Web 管理端（Phase 4） |
 | 规模 | 十万级文档 / 千万级 chunk，单机承载，预留横向扩展路径 |
 | 核心能力 | 多格式解析（PDF/Office/代码/网页）、中英混合检索、混合检索+重排、RAG 生成、增量更新、评估闭环 |
 | 非目标 | 不追求多模态生成、不内置业务工作流、不替代 Dify 类应用平台 |
@@ -99,7 +99,7 @@ flowchart TB
 | 网页采集 | httpx + Playwright + Readability | 正文提取、sitemap、增量更新 |
 | 文件存储 | MinIO | S3 兼容，本地对象存储 |
 | 元数据 | PostgreSQL 16 | 文档/知识库/任务状态/会话/API Key |
-| MCP | 官方 `mcp` Python SDK | stdio（v1.0）；streamable HTTP（v1.1，ADR-006 前置条件） |
+| MCP | 官方 `mcp` Python SDK | stdio（v1.0）+ streamable HTTP（v1.1 已实现，ADR-006） |
 | Web 前端 | Vue 3 + TypeScript + Pinia + Element Plus | 内部管理端，开发效率优先 |
 | 可观测 | Prometheus + Grafana + structlog | 指标、链路、结构化日志 |
 | 评估 | RAGAS + DeepEval | 忠实度/相关度/上下文精度回归 |
@@ -243,13 +243,16 @@ flowchart LR
 
 | Tool | 参数 | 说明 |
 |---|---|---|
-| `search_knowledge` | query, kb, top_k, filters | 混合检索 + 重排，返回带引用 chunk |
+| `search_knowledge` | query, kb, top_k | 混合检索 + 重排，返回带引用 chunk |
 | `list_knowledge_bases` | — | 列出 Agent 有权限的 KB |
-| `ask` | question, kb, stream | 完整 RAG 问答（检索 + 生成） |
-| `ingest_document` | path / url, kb | 提交摄取任务，返回 job_id |
-| `get_document_status` | job_id / doc_id | 查询摄取进度 |
+| `ask` | question, kb | 完整 RAG 问答（检索 + 生成） |
+| `ingest_document` | path, kb | 提交摄取任务，返回 job_id（仅 stdio 本机通道） |
+| `get_document_status` | job_id | 查询摄取进度（任务归属 KB 须在调用方 ACL 内） |
 
-- 双 transport：stdio（本机 Claude Code 配置即用）+ streamable HTTP（远程 Agent 接入）
+- 双 transport：stdio（本机 Claude Code 配置即用，主 Key 全权限语义）
+  + streamable HTTP（v1.1 已实现：`/mcp`，与 REST 同一认证/限流/ACL 强制点，
+  请求级 ACL 经 contextvar 注入；远程通道拒绝本地路径摄取（审计 H-2）；
+  每次工具调用落 `mcp_*` 审计动作码；TLS 前置要求见 phase6-plan 附录 A）
 - 工具描述中嵌入 KB 目录与使用示例，提升 Agent 的工具选择准确率
 
 ## 10. Web 管理端（Vue 3）

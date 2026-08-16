@@ -157,6 +157,55 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 `/admin/api/*`：登录（Cookie 会话 + CSRF token）/ 改密 / 登出 / KB / API Key /
 订阅 / 标注 / 审计 / 指标。管理端与 API Key 通道彻底隔离（Bearer 被显式拒绝）。
 
+### 5.5 MCP 接入（Agent 直连）
+
+五个工具：`search_knowledge` / `list_knowledge_bases` / `ask` / `ingest_document` /
+`get_document_status`（工具描述内嵌 KB 目录，供 Agent 自动选择）。
+
+**stdio（本机，Claude Code 即配即用）**：
+
+```json
+{ "mcpServers": { "local-rag": {
+  "command": "uv", "args": ["run", "python", "scripts/mcp_stdio.py"]
+} } }
+```
+
+stdio 通道以本机信任边界授予主 Key 全权限语义，支持本地文件摄取。
+
+**streamable HTTP（v1.1，远程 Agent / 多机接入）**：
+
+```text
+端点：POST http://<host>:8000/mcp   （JSON-RPC 2.0，Content-Type: application/json）
+认证：Authorization: Bearer <API_KEY>（与 REST 同一强制点；空 Key fail-closed）
+会话：首次 POST initialize 后，响应头 Mcp-Session-Id 需随后续请求回传；
+      会话结束 DELETE /mcp（带同一 Session-Id 头）
+```
+
+```bash
+# 1) 初始化（建立会话）
+curl -X POST http://127.0.0.1:8000/mcp -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+       "protocolVersion":"2025-03-26","capabilities":{},
+       "clientInfo":{"name":"my-agent","version":"0.1"}}}'
+# → 响应头 Mcp-Session-Id: <SID>
+
+# 2) 调用工具（带会话头）
+curl -X POST http://127.0.0.1:8000/mcp -H "Authorization: Bearer $KEY" \
+  -H "Mcp-Session-Id: <SID>" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+       "name":"search_knowledge","arguments":{"query":"波导增益","kb":"<kb_id>"}}}'
+```
+
+HTTP 通道语义：
+
+- 权限与 REST 完全同源：Key 的 KB 级 ACL 逐请求生效（越权 → 工具级错误，
+  显式「无权限」而非空结果）；`list_knowledge_bases` 只显示有权限的 KB
+- `ingest_document` 在 HTTP 通道被拒绝（仅 stdio 本机通道可用，防远程任意文件读取）
+- `get_document_status` 校验任务归属 KB 在调用方 ACL 内
+- 每次工具调用落审计（`mcp_*` 动作码，含 Key 主体与 trace_id）
+- 限流/请求体上限与 REST 同规则；对外暴露需 TLS 前置（phase6-plan 附录 A）
+
 ## 6. 模型与性能部署
 
 ### 6.1 嵌入（bge-m3 本机 GPU）
