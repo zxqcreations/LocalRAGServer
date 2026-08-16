@@ -140,8 +140,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 fn()
                 checks[name] = "ok"
-            except Exception as exc:
-                checks[name] = f"down: {type(exc).__name__}"
+            except Exception:
+                # 安全审计 L-5：探针不回显内部组件类名（细节只进服务端日志）
+                _logger.warning("readiness_check_down", detail=name)
+                checks[name] = "down"
 
         def _db() -> None:
             app.state.registry.list_kbs()
@@ -243,7 +245,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def admin_middleware(request: Request, call_next):
-        if not request.url.path.startswith("/admin/"):
+        # 安全审计 L-6：/admin（无尾斜杠）同样落入管理通道隔离
+        if request.url.path != "/admin" and not request.url.path.startswith("/admin/"):
             return await call_next(request)
         # 通道隔离：管理路由显式拒绝 API Key
         if request.headers.get("Authorization", "").startswith("Bearer "):

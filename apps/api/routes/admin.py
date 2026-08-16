@@ -200,6 +200,8 @@ def metrics(request: Request):
 
 @router.get("/audit", response_model=Envelope[list[dict]])
 def list_audit(registry: RegistryDep, limit: int = 50):
+    # 安全审计 L-4：limit 上限钳制（防全量拉取打内存）
+    limit = max(1, min(limit, 500))
     logs = registry.list_audit(limit=limit)
     return ok(
         [
@@ -309,6 +311,7 @@ def create_annotation(
 def list_annotations(request: Request, registry: RegistryDep, kb_id: str, limit: int = 200):
     # 安全审计 H-4：标注含用户原始查询，readonly 不可读
     _require_role(request, "admin")
+    limit = max(1, min(limit, 500))  # 安全审计 L-4：上限钳制
     if registry.get_kb(kb_id) is None:
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
     return ok(

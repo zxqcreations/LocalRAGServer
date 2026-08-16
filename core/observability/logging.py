@@ -33,8 +33,12 @@ def _utf8_stream(stream):
 
 
 def _filter_fields(logger, method_name, event_dict):
-    """白名单过滤：未登记字段丢弃（防敏感数据误入日志）。"""
-    return {k: v for k, v in event_dict.items() if k in _ALLOWED_KEYS}
+    """白名单过滤：未登记字段丢弃（防敏感数据误入日志）；
+    detail 自由字段截断 500 字符（安全审计 L-9：半开放字段的兜底钳制）。"""
+    filtered = {k: v for k, v in event_dict.items() if k in _ALLOWED_KEYS}
+    if isinstance(filtered.get("detail"), str) and len(filtered["detail"]) > 500:
+        filtered["detail"] = filtered["detail"][:500] + "…"
+    return filtered
 
 
 def configure_logging(level: str = "INFO") -> None:
