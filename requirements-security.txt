@@ -1,6 +1,23 @@
-# pip 直管依赖清单（安全审计 M-11：这些包不进 uv.lock，CI 的 pip-audit
-# 覆盖不到——本清单供专用 audit job 补偿监控）。
-# 维护：安装新 pip 直管包时同步追加（无版本钉扎，审计最新已知 CVE）。
+# pip-managed dependency list (security audit M-11: these packages are not in
+# uv.lock, so CI's lockfile pip-audit cannot see them -- this list feeds a
+# dedicated audit job as compensation).
+# Maintenance: append new pip-managed packages here (no version pins -- audit
+# against latest known CVEs).
+#
+# NOTE: this file MUST stay ASCII-only. pip-audit's requirements parser opens
+# it with the platform locale codec (cp1252 on Windows) and crashes on
+# non-ASCII comments (CI failure 2026-08-16).
+#
+# Registered-and-accepted advisories (see docs/audit/20260816-35.md):
+#   PYSEC-2026-3046 (ragas SSRF, CVE-2026-6587): affects the multi-modal
+#     faithfulness module only. This project runs text-only RAGAS eval with a
+#     local judge; the module is never invoked. No fixed release upstream.
+#   PYSEC-2026-2447 (diskcache pickle deserialization, CVE-2025-69872):
+#     local-only vector (AV:L, requires write access to the cache dir) in
+#     ragas' cache dependency. Eval runs offline as the service user; no
+#     untrusted input reaches the cache. No fixed release upstream.
+# CI ignores both IDs explicitly (see .github/workflows/ci.yml) so NEW
+# advisories in these packages still fail the gate.
 torch
 torchvision
 sentence-transformers

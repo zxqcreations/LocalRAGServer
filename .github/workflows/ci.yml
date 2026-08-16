@@ -33,7 +33,12 @@ jobs:
       - name: pip-audit
         run: uv run pip-audit
       - name: pip 直管依赖 CVE 监控（M-11：重型依赖不进 lock 的补偿审计）
-        run: uv run pip-audit -r requirements-security.txt
+        # 登记不修的公告显式忽略（理由见 requirements-security.txt 头注与
+        # docs/audit/20260816-35.md）；其余新公告仍照常使门禁失败
+        run: >
+          uv run pip-audit -r requirements-security.txt
+          --ignore-vuln PYSEC-2026-3046
+          --ignore-vuln PYSEC-2026-2447
       - name: pytest + 覆盖率门禁（≥80%）
         run: uv run pytest --cov --cov-fail-under=80
       - name: 冒烟脚本（全链路回归基线）
