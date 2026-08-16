@@ -78,7 +78,17 @@ def resolve_public(host: str) -> list[str]:
 def _host_allowed(host: str, allowlist: set[str]) -> bool:
     if not allowlist:
         return True
-    return host in allowlist or any(host.endswith(f".{d}") for d in allowlist)
+    if host in allowlist:
+        return True
+    for entry in allowlist:
+        # 安全审计 L-2：条目必须是可注册域名（至少一段点）——公共后缀
+        # （如 "com"）作为白名单条目会退化为任意域放行，启动校验兜底之外
+        # 此处也拒绝对单段条目做后缀匹配
+        if "." not in entry:
+            continue
+        if host.endswith(f".{entry}"):
+            return True
+    return False
 
 
 class _HtmlTextExtractor(HTMLParser):
@@ -167,12 +177,17 @@ class UrlFetcher:
                 raise SsrfBlockedError("URL 缺少主机名")
             if not _host_allowed(host, self._allowlist):
                 raise SsrfBlockedError(f"域名不在白名单：{host}")
+            # 安全审计 L-1：非法端口（urlparse 解析异常）转防护错误而非 500
+            try:
+                parsed_port = parsed.port
+            except ValueError as exc:
+                raise SsrfBlockedError(f"端口非法：{current}") from exc
             # 逐跳解析+校验+固定 IP（防护层 3/4；M-1 修复）
             ip_target = self._resolve_host(host)
             if ip_target is not None:
-                port = f":{parsed.port}" if parsed.port else ""
+                port = f":{parsed_port}" if parsed_port else ""
                 connect_url = parsed._replace(netloc=f"{ip_target}{port}").geturl()
-                host_header = host if not parsed.port else f"{host}:{parsed.port}"
+                host_header = host if not parsed_port else f"{host}:{parsed_port}"
                 resp = self._client.get(
                     connect_url,
                     headers={"Host": host_header},
