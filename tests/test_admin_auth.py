@@ -69,6 +69,24 @@ def test_admin_session_lifecycle(tmp_path):
     assert registry.find_admin_session(session_hash) is None
 
 
+def test_purge_expired_sessions_on_init(tmp_path):
+    # 安全审计 M-9：启动清扫过期会话；未过期保留
+    from datetime import UTC, datetime, timedelta
+
+    db = tmp_path / "r2.db"
+    registry = Registry(f"sqlite:///{db}")
+    user = registry.ensure_admin_user("admin", hash_password("p"))
+    now = datetime.now(UTC).replace(tzinfo=None)
+    registry.create_admin_session(user.id, hash_session("old"), now - timedelta(hours=1))
+    registry.create_admin_session(user.id, hash_session("fresh"), now + timedelta(hours=1))
+    registry.close()
+    # 重新打开（模拟重启）→ 启动清扫
+    registry = Registry(f"sqlite:///{db}")
+    assert registry.find_admin_session(hash_session("old")) is None
+    assert registry.find_admin_session(hash_session("fresh")) is not None
+    registry.close()
+
+
 def test_password_change_revokes_other_sessions(tmp_path):
     # 安全审计 M-3：改密吊销其他会话；改密请求自身会话保留
     registry = Registry(f"sqlite:///{tmp_path / 'r.db'}")

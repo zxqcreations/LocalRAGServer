@@ -32,6 +32,8 @@ jobs:
           PYTHONUTF8: "1"
       - name: pip-audit
         run: uv run pip-audit
+      - name: pip 直管依赖 CVE 监控（M-11：重型依赖不进 lock 的补偿审计）
+        run: uv run pip-audit -r requirements-security.txt
       - name: pytest + 覆盖率门禁（≥80%）
         run: uv run pytest --cov --cov-fail-under=80
       - name: 冒烟脚本（全链路回归基线）
@@ -50,6 +52,9 @@ jobs:
         run: |
           npm install
           npm run build
+      - name: npm 依赖审计（M-11）
+        working-directory: apps/web
+        run: npm audit --audit-level=high
 
   eval-regression:
     name: 检索回归（评测集 v1 基线）

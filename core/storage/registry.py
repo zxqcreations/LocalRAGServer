@@ -162,6 +162,8 @@ class Registry:
         self._engine = create_engine(database_url, **kwargs)
         SQLModel.metadata.create_all(self._engine)
         self._ensure_schema_extensions()
+        # 安全审计 M-9：启动清扫过期会话（AdminSession 只增不删的残余风险）
+        self.purge_expired_sessions(_utcnow())
 
     def _ensure_schema_extensions(self) -> None:
         """启动期幂等 schema 自愈：create_all 只建表不补列，老库升级在此补列。
@@ -547,6 +549,18 @@ class Registry:
         with Session(self._engine) as s:
             s.exec(delete(AdminSession).where(AdminSession.session_hash == session_hash))  # type: ignore[arg-type]
             s.commit()
+
+    def purge_expired_sessions(self, now: datetime) -> int:
+        """清理已过期会话（安全审计 M-9：AdminSession 只增不删的残余风险）。
+
+        启动时调用（Registry 初始化）；返回删除条数。
+        """
+        with Session(self._engine) as s:
+            result = s.exec(
+                delete(AdminSession).where(AdminSession.expires_at < now)  # type: ignore[arg-type]
+            )
+            s.commit()
+            return int(result.rowcount) if result.rowcount is not None else 0
 
     def list_audit(self, limit: int = 50) -> list[AuditLog]:
         with Session(self._engine) as s:

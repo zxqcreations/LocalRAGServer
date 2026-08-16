@@ -50,4 +50,4 @@ docs/perf/ragas-eval-[0-9]*-*.jsonl
 docs/perf/.judge-v2-marker
 .qdrant-initialized
 control/
-storage/
+/storage/

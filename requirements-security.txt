@@ -1,0 +1,12 @@
+# pip 直管依赖清单（安全审计 M-11：这些包不进 uv.lock，CI 的 pip-audit
+# 覆盖不到——本清单供专用 audit job 补偿监控）。
+# 维护：安装新 pip 直管包时同步追加（无版本钉扎，审计最新已知 CVE）。
+torch
+torchvision
+sentence-transformers
+mineru
+transformers
+gradio
+ragas
+langchain-openai
+langchain-community
