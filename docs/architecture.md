@@ -332,10 +332,10 @@ flowchart LR
 | **Phase 0 · MVP** | 2~3 天 | 骨架仓库；Qdrant + bge-m3（dense-only）+ Qwen3 直连；单文件同步摄取；`/search` + `/chat` 可用 |
 | **Phase 1 · 摄取管线** | 1~2 周 | MinerU/PaddleOCR 接入；Celery 异步 + 状态机 + 去重断点；支持 10 万文档批量导入 |
 | **Phase 2 · 检索增强** | 1 周 | sparse + RRF 混合检索；reranker；parent-child；代码 tree-sitter 检索；查询路由 |
-| **Phase 3 · 服务化** | 1 周 | MCP Server（双 transport）；OpenAI 兼容接口；API Key + 限流 |
+| **Phase 3 · 服务化** | 1 周 | MCP Server（stdio，v1.0）；OpenAI 兼容接口；API Key + 限流 |
 | **Phase 4 · 平台化** | 1 周 | Web 管理端；Prometheus/Grafana；结构化日志 |
 | **Phase 5 · 深化** | 持续 | RAGAS 评估闭环；网页爬虫增量；可选 LightRAG；压测调优 |
-| **Phase 6 · 生产就绪**（v1.1 新增） | 按验收标准 | 七项全绿：安全审计 / 备份+恢复演练 / SLO 压测 / 故障演练（降级矩阵）/ 发布回滚 runbook 演练 / 灰度放量 / Linux 迁移验收 → **v1.0.0 发布** |
+| **Phase 6 · 生产就绪**（已完成 · v1.0.0） | 按验收标准 | 七项全绿：安全审计 / 备份+恢复演练 / SLO 压测 / 故障演练（降级矩阵）/ 发布回滚 runbook 演练 / 灰度决策 / 迁移清单 → **v1.0.0 发布** |
 
 ## 17. 备份与灾备（v1.1 新增，源自审计 ARC-002）
 

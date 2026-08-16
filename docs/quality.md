@@ -24,27 +24,27 @@
 > 每阶段四段式：进入标准 → 质量门 → 完成定义(DoD) → 交付物。
 > 版本映射：P0→v0.1.0，P1→v0.2.0，P2→v0.3.0，P3→v0.4.0，P4→v0.5.0，P5→v0.6.0，P6→v1.0.0。
 
-### Phase 0 · MVP（当前阶段）
+### Phase 0 · MVP（已完成 · v0.1.0）
 - **进入**：git init + 受保护 main；环境决策 ADR 先行（生成后端 Turing 选型 Spike、免 Docker Qdrant 验证）；dev 工具链补齐；测试隔离基座；Python 版本口径统一
 - **关键质量门**：最小认证骨架与第一批接口**同批交付**（fail-closed）；上传防护（UUID 对象键/魔数/大小上限）；冒烟脚本全链路；配置整改（见 §5 P0-3）
 - **DoD**：/search + /chat 可用（统一信封+错误码）；覆盖率 ≥80% CI 强制；SM75 兼容矩阵 + 生成后端 ADR 获批；v0.1.0
 
-### Phase 1 · 摄取管线
+### Phase 1 · 摄取管线（已完成 · v0.2.0）
 - **关键门**：状态机全转移表驱动测试；幂等键 = **(kb_id, content_hash)**（同文件可入多 KB、同 KB 内去重）；ZIP 容器预检（压缩比>100:1 拒绝/深度≤2）；Alembic 可逆迁移 + SQLite→PG 回滚演练；SSRF 防护与 URL 摄取**同批落地**；documents 表含 pipeline_version
 
-### Phase 2 · 检索增强
+### Phase 2 · 检索增强（已完成 · v0.3.0）
 - **关键门**：评测集 v1（≥50 条）进 CI（recall@k/MRR 不下降才可合并）；RRF 纯函数手算 fixture ≥3 组；拒答三分支 + LLM 零调用断言 + hard-negative；golden 向量/重排快照；P95<500ms 实测（不达标出 ADR）；批量回查 `WHERE id = ANY(...)` 禁止逐条点查
 
-### Phase 3 · 服务化
+### Phase 3 · 服务化（已完成 · v0.4.0）
 - **关键门**：**ACL 强制点**：唯一入口 `resolve_allowed_kb_ids(key)`，kb_id 只由服务端推导、与 Key ACL 求交集，越权 403；跨 KB 泄漏集成测试矩阵进 CI；MCP 双 transport 实测；Key 慢哈希（argon2id/scrypt）+ 轮换/吊销；audit_logs 表；/healthz + /readyz
 
-### Phase 4 · 平台化
+### Phase 4 · 平台化（已完成 · v0.5.0）
 - **关键门**：Web 管理端独立认证（初始密码强制改、HttpOnly/CSRF、RBAC 两档）；5 模块 Playwright E2E；trace_id 全链路验证；**告警规则集上线**（含备份失败告警）；标注 API 契约测试
 
-### Phase 5 · 深化
+### Phase 5 · 深化（已完成 · v0.6.0）
 - **关键门**：RAGAS 四项进 CI（judge 独立选型防自评偏置）；评测集版本化+污染隔离；压测报告与容量估算对照归档（差异逐条 ADR）；缺陷清场（无未关闭 CRITICAL/HIGH）；架构文档 v2.0 草案
 
-### Phase 6 · 生产就绪（**审计新增阶段**）
+### Phase 6 · 生产就绪（已完成 · v1.0.0）
 - **关键门（生产就绪七项全绿）**：①安全审计（TLS/RBAC/审计流/密钥轮换/敏感内容策略）②备份+恢复演练（两场景 runbook 实测）③SLO 压测达标（满数据量 P95<500ms + 耗时分解）④故障演练（逐依赖击杀验证降级矩阵）⑤发布/回滚 runbook 演练（per-KB feature flag，旧模型保留 ≥72h）⑥灰度放量验证 ⑦Windows→Linux 迁移验收（同模型同 1000 文档对比）
 - **DoD**：v1.0.0 发布（24h 观察期，P95 劣化>30% 即回滚）；架构文档 v2.0 正式批准
 

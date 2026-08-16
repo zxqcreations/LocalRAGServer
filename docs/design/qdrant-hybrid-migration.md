@@ -1,8 +1,8 @@
-# Qdrant dense+sparse 混合检索迁移计划（Phase 2 进入标准 · 待批准）
+# Qdrant dense+sparse 混合检索迁移计划（Phase 2 进入标准）
 
-> 状态：草案待批准 · 2026-08-14
-> 目标：将当前 dense-only collection（named vector "dense"）演进为 dense + sparse 双向量，
-> 支持 Qdrant Query API 原生 RRF 混合检索（架构 §6）。
+> 状态：**已被 ADR-004 取代**（2026-08-14 决策：Qdrant local 模式无 full-text
+> 索引，改用纯 Python BM25 独立稀疏通道 + RRF 融合，无需此迁移）。
+> 本文档存档保留设计讨论。
 
 ## 1. 现状
 

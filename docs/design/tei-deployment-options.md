@@ -1,6 +1,7 @@
-# TEI 部署方案选项分析（Phase 2 进入标准 · 待用户决策）
+# TEI 部署方案选项分析（Phase 2 进入标准）
 
-> 状态：分析稿 · 2026-08-14
+> 状态：**已决策**（2026-08-14，用户选择 A+D 组合，见 ADR-003）
+> A = 本机 torch 嵌入（bge-m3，实测 141 chunks/s）；D = TEI 预留（Linux 部署时切换）。
 > 背景：架构 §3 生产嵌入走 TEI（text-embeddings-inference）；实机无 Docker、无 WSL2，
 > 本机开发态已有 torch + sentence-transformers（Spike 实测 bge-m3 dense 141 条/s、驻留 888MB）。
 
