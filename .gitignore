@@ -17,7 +17,8 @@ coverage.xml
 htmlcov/
 
 # 模型文件（本地缓存，通过 MANIFEST 管理；MANIFEST 本身入版本库）
-models/
+# 注：models/* 而非 models/——父目录级排除会吞掉下面的例外规则
+models/*
 !models/MANIFEST.json
 
 # 日志

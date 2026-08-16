@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-08-14 20:11",
+  "entries": [
+    {
+      "name": "Qwen3-8B-Q4_K_M.gguf",
+      "source_url": "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+      "version": "Q4_K_M（unsloth 仓库 main 分支，2026-08 下载）",
+      "sha256": "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4",
+      "size_bytes": 5027784512
+    },
+    {
+      "name": "qwen2.5-7b-instruct-q4_k_m.gguf",
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF",
+      "version": "Q4_K_M（两分片合并，2026-08 下载）",
+      "role": "RAGAS 独立评判模型（CPU，端口 9002）",
+      "size_bytes": 4683073536
+    },
+    {
+      "name": "llama.cpp",
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/latest",
+      "version": "b10427（commit 650913862，CUDA 12.4 win-x64，钉版本）",
+      "present": true
+    },
+    {
+      "name": "BAAI/bge-m3",
+      "source_url": "https://huggingface.co/BAAI/bge-m3",
+      "version": "HF 缓存（huggingface_hub 管理，snapshot 见缓存目录）",
+      "present": true
+    }
+  ]
+}
