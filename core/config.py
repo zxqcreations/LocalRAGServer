@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # 任务队列（ADR-002：本机 filesystem 代理，生产切 Redis）
     celery_broker_url: str = "filesystem://"
 
+    # 限流（ADR-005 Phase 6）：redis_url 非空 => Redis 令牌桶（跨进程一致），
+    # 空 => 进程内内存实现；Redis 不可用时 fail-open 回退内存（见 build_limiter）
+    redis_url: str | None = None
+
     # 认证（审计 F-01：最小认证骨架随第一批接口同批交付；KB 级 ACL 属 Phase 3）
     # 空值 => fail-closed：业务接口全部拒绝，仅 /health 开放
     api_key: str = ""

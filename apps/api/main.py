@@ -77,7 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
             )
         app.state.registry = Registry(settings.database_url)
-        app.state.limiter = build_limiter()
+        app.state.limiter = build_limiter(settings)  # ADR-005 Phase 6：RAG_REDIS_URL 非空走 Redis
         app.state.metrics = MetricsCollector()
         configure_logging()
         # 初始 admin 密码（web-admin-auth.md §1：一次性生成，首次登录强制修改）
@@ -317,7 +317,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raw_key = header[len("Bearer ") :]
         # 认证前 per-IP 限流（审计 M-2：防 scrypt 计算放大 DoS 与失败尝试爆破）
         ip = request.client.host if request.client else "unknown"
-        if not app.state.limiter.allow(f"ip:{ip}", 30, 0.5):
+        if not await app.state.limiter.allow(f"ip:{ip}", 30, 0.5):
             _logger.warning("rate_limited", actor=f"ip:{ip}", limit="30/0.5s")
             return JSONResponse(
                 status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
@@ -329,7 +329,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _mcp_allowed_kbs.set("*")  # MCP HTTP：请求级 ACL（与 REST 同语义）
             _mcp_actor.set("master")
             _arm_mcp(request, "master")
-            if not app.state.limiter.allow("key:master", 120, 2.0):
+            if not await app.state.limiter.allow("key:master", 120, 2.0):
                 _logger.warning("rate_limited", actor="key:master", limit="120/2s")
                 return JSONResponse(
                     status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
@@ -347,7 +347,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _arm_mcp(request, record.id)
         request.state.api_key_record = record
         request.state.actor = record.id
-        if not app.state.limiter.allow(f"key:{record.id}", 120, 2.0):
+        if not await app.state.limiter.allow(f"key:{record.id}", 120, 2.0):
             _logger.warning("rate_limited", actor=f"key:{record.id}", limit="120/2s")
             return JSONResponse(
                 status_code=429, content=err(RATE_LIMITED, "请求过于频繁，请稍后重试")
@@ -367,7 +367,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         # 登录限流（web-admin-auth.md §1：per-IP + 通用配额）
         ip = request.client.host if request.client else "unknown"
-        if request.url.path.endswith("/login") and not app.state.limiter.allow(
+        if request.url.path.endswith("/login") and not await app.state.limiter.allow(
             f"admin-login:{ip}", 10, 10.0 / 60.0
         ):
             return JSONResponse(

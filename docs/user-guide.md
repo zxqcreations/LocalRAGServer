@@ -62,6 +62,7 @@ uv run python scripts/smoke.py            # 全链路冒烟（上传→检索→
 | RAG_URL_FETCH_MAX_BYTES / _REDIRECTS / _TIMEOUT | 5MB/3/15s | URL 抓取防护 |
 | RAG_URL_FETCH_ALLOW_LOOPBACK | false | **生产必须 false**（SSRF 防护） |
 | RAG_CELERY_BROKER_URL | filesystem:// | 生产切 Redis（ADR-002） |
+| RAG_REDIS_URL | 空（进程内限流） | 生产设 `redis://…`：限流令牌桶跨进程一致（ADR-005 Phase 6；Redis 不可用自动回退内存，fail-open） |
 | RAG_MAX_UPLOAD_MB / MAX_PDF_PAGES | 200/1000 | 上传防护 |
 | RAG_REFUSAL_THRESHOLD | 0.25 | 检索最高分低于此值 → 拒答 |
 | RAG_CHUNK_SIZE / _OVERLAP | 512/64 | 分块策略 |
