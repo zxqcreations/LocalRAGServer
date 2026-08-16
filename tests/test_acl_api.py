@@ -4,11 +4,11 @@
 身份由每请求 headers 显式指定。
 """
 import pytest
+from conftest import API_KEY  # pytest 以顶层模块名加载（勿改 tests.conftest——双重加载根源）
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app
 from core.config import Settings
-from tests.conftest import API_KEY
 
 
 @pytest.fixture

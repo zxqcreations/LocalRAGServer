@@ -1,10 +1,10 @@
 """管理端 API 契约测试（web-admin-auth.md §4 全项）。"""
+from conftest import API_KEY  # pytest 以顶层模块名加载（勿改 tests.conftest——双重加载根源）
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app
 from core.config import Settings
 from core.security.admin import hash_password
-from tests.conftest import API_KEY
 
 INITIAL_PW = "initial-pass-for-test"
 

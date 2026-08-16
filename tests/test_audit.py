@@ -1,9 +1,9 @@
 """审计与限流测试（F-05 只追加落库；ADR-005 分层配额 429）。"""
+from conftest import API_KEY  # pytest 以顶层模块名加载（勿改 tests.conftest——双重加载根源）
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app
 from core.config import Settings
-from tests.conftest import API_KEY
 
 
 def test_record_audit_and_list(tmp_path):
