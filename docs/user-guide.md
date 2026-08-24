@@ -24,12 +24,31 @@ cp .env.example .env
 
 ### 1.3 启动
 
+#### Windows 一键启动（推荐）
+
+```powershell
+# 全新启动
+.\start_all.ps1 stub no-llm         # 零依赖快速测试（stub 嵌入，无 LLM）
+.\start_all.ps1 local no-llm        # bge-m3 本机嵌入 + 无 LLM
+.\start_all.ps1 local with-llm      # 完整栈（GPU + vLLM）
+
+# 停止所有服务
+.\stop_all.ps1
+```
+
+#### 手动启动
+
 ```bash
+# 配置 .env：至少设置 RAG_API_KEY；嵌入后端默认 stub（零依赖）
+# 如需本机 bge-m3: RAG_EMBEDDING_BACKEND=local 并安装依赖
+uv sync --extra embed   # 仅 embedding_backend=local 时需要
+
 # API 服务
 uv run uvicorn apps.api.main:create_app --factory --host 127.0.0.1 --port 8000
 
-# worker（摄取任务消费；--beat 同时启动 URL 订阅调度）
-uv run python scripts/worker.py --beat
+# Worker（摄取任务消费；--beat 同时启动 URL 订阅调度）
+uv run celery -A apps.api.main.celery_app worker --pool=solo --loglevel=info
+uv run celery -A apps.api.main.celery_app beat --loglevel=info
 
 # 首次启动会在 data/admin_initial_password 生成初始管理密码（日志可见），
 # 登录管理端后强制修改（明文文件改密后自动销毁）
@@ -302,8 +321,7 @@ RAG_EMBEDDING_BACKEND=local   # 启动时加载 BAAI/bge-m3（HF 缓存离线可
 
 ```bash
 # 本地已有模型（约 5.2GB）在 models/gguf/Qwen3-8B-Q4_K_M.gguf
-models/llamacpp/llama-server.exe -m models/gguf/Qwen3-8B-Q4_K_M.gguf \
-  --host 127.0.0.1 --port 9001 -ngl 40 -c 8192
+models/llamacpp/llama-server.exe -m models/gguf/Qwen3-8B-Q4_K_M.gguf --host 127.0.0.1 --port 9001 -ngl 40 -c 8192
 RAG_LLM_BASE_URL=http://127.0.0.1:9001/v1
 ```
 
@@ -381,6 +399,8 @@ uv run python -m eval.run_retrieval --check-baseline  # 检索回归门禁
 | 管理端 403 password_change_required | 首次登录必须先改密（服务端强制） |
 | 检索慢（万级） | 确认 RAG_QDRANT_URL 已切 server 模式（本地模式 brute-force） |
 | 未知 RAG_* 报错 | 环境变量拼写错误（fail-fast 提示） |
+| **上传/搜索 500** | `RAG_EMBEDDING_BACKEND=local` 但 torch/sentence-transformers 未安装。修复：`RAG_EMBEDDING_BACKEND=stub` 或 `uv sync --extra embed` |
+| **启动后只有 /health OK** | Embedding 后端初始化失败导致整个 pipeline 断裂。检查日志中的 ImportError，切换为 stub 快速验证 |
 
 ## 10. 快速命令索引
 

@@ -68,7 +68,10 @@ class LocalEmbedder:
         self._model = SentenceTransformer(model_name)
         # type: ignore — torch/sentence-transformers stub 联动使本类分析推迟（LocalEmbedder*），
         # 运行时语义正确；本类为 GPU 手动验证路径（pragma: no cover）
-        self.dim: int = self._model.get_embedding_dimension()  # type: ignore
+        self.dim: int = getattr(
+            self._model, 'get_embedding_dimension',
+            lambda: self._model.get_sentence_embedding_dimension()
+        )()  # type: ignore
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
         # encode 返回类型随输入形式变化（typeshed 声明为联合类型），显式收窄
