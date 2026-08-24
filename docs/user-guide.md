@@ -317,7 +317,38 @@ RAG_EMBEDDING_BACKEND=local   # 启动时加载 BAAI/bge-m3（HF 缓存离线可
 
 项目使用 Qwen3-8B 作为回答生成模型，支持两种服务端：
 
-#### 方案 A：llama-server（CPU / 轻量 GPU，开发默认）
+### 6.2.1 GPU 依赖安装说明（重要）
+
+嵌入后端 `local`（bge-m3 GPU）和 vLLM **不走 `uv sync --extra embed`**——该 extra 故意未定义。因为 GPU torch 必须从 PyTorch CUDA index 单独安装，`uv sync` 会用 lock 里的 CPU 版覆盖它。
+
+**正确安装步骤：**
+
+```bash
+# 1) 升级 pip
+pip install --upgrade pip setuptools wheel
+
+# 2) 安装 GPU torch（~4GB，需代理或科学上网）
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+
+# 3) 验证 CUDA
+python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+# → 应输出 True；若为 False 则需检查驱动/NVIDIA 工具链
+
+# 4) 安装 sentence-transformers
+pip install sentence-transformers
+
+# 5) 安装其他项目依赖
+uv sync --extra dev
+```
+
+vLLM 额外步骤（仅 NVIDIA GPU）：
+```bash
+pip install vllm
+```
+
+---
+
+#### 6.2.2 llama-server（CPU / 轻量 GPU，开发默认）
 
 ```bash
 # 本地已有模型（约 5.2GB）在 models/gguf/Qwen3-8B-Q4_K_M.gguf

@@ -1,16 +1,44 @@
 # LocalRAGServer 一键启动脚本（PowerShell）
-# 启动：./start_all.ps1 [stub|local] [no-llm|with-llm]
-#   stub    = 零依赖快速测试模式
-#   local   = 本机 bge-m3 嵌入（需 uv sync --extra embed + GPU）
-#   no-llm  = 不启动 LLM 服务（仅检索/上传可用）
-#   with-llm= 尝试启动 vLLM（需 NVIDIA GPU + pip install vllm）
+# 用法: ./start_all.ps1 -h 查看帮助 | ./start_all.ps1 stub/local [no-llm/with-llm]
+#   stub    = 零依赖快速测试（stub 嵌入，所有功能可跑通）
+#   local   = 本机 bge-m3 GPU 嵌入（需先手动安装 torch CUDA + sentence-transformers）
+#   no-llm  = 不启动 LLM（上传+搜索可用；需 llamacpp/vLLM 才有生成能力）
+#   with-llm= 尝试启动 vLLM（需 NVIDIA GPU + 已安装 vllm）
 
 param(
     [ValidateSet("stub", "local")]
     [string]$EmbeddingBackend = "local",
     [ValidateSet("no-llm", "with-llm")]
-    [string]$LlmMode = "no-llm"
+    [string]$LlmMode = "with-llm"
 )
+
+# uv sync --extra embed 帮助：为什么报错及正确安装步骤
+if ($args -contains "-h" -or $args -contains "--help") {
+    Write-Host @"
+
+LocalRAGServer 一键启动脚本
+
+用法:
+  .\start_all.ps1 stub no-llm        # 零依赖快速测试（推荐先试这个验证环境）
+  .\start_all.ps1 local no-llm       # GPU bge-m3 嵌入 + CPU llama-server/vLLM
+  .\start_all.ps1 local with-llm     # 完整栈（GPU 嵌入 + vLLM）
+
+注意：'uv sync --extra embed' 会报错（embed extra 未定义），这是设计上的。
+原因：GPU torch 必须从 PyTorch CUDA index 单独安装，无法放进 uv lock/extras。
+
+正确安装步骤（按顺序执行）:
+  1) pip install --upgrade pip setuptools wheel
+  2) pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+  3) pip install sentence-transformers
+  4) uv sync --extra dev
+
+安装完成后:
+  5) python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+     → 应输出 True
+
+"@
+    exit 0
+}
 
 $ErrorActionPreference = "Stop"
 $ROOT = $PSScriptRoot
@@ -22,11 +50,11 @@ Write-Host " 大模型: $(if($LlmMode -eq 'with-llm'){'vLLM (GPU)'}else{'不启�
 Write-Host "========================================" -ForegroundColor Cyan
 
 # --- 清理残留进程 ---
-Write-Host "`n[1/6] 清理残留进程..." -ForegroundColor Green
-foreach ($proc in @("python", "node", "vllm", "celery")) {
-    Get-Process $proc -ErrorAction SilentlyContinue | Stop-Process -Force
-}
-Write-Host "  已清理。" -ForegroundColor Gray
+# Write-Host "`n[1/6] 清理残留进程..." -ForegroundColor Green
+# foreach ($proc in @("python", "node", "vllm", "celery")) {
+#     Get-Process $proc -ErrorAction SilentlyContinue | Stop-Process -Force
+# }
+# Write-Host "  已清理。" -ForegroundColor Gray
 
 # --- 检查 Python 环境 ---
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
@@ -103,7 +131,7 @@ try {
 Write-Host "[6/6] 启动 Worker + Beat (摄取任务)..." -ForegroundColor Green
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe -m celery -A apps.api.main.celery_app worker --pool=solo --loglevel=info" -WindowStyle Normal
 Start-Sleep -Seconds 1
-Start-Process powershell -ArgumentLine "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe -m celery -A apps.api.main.celery_app beat --loglevel=info" -WindowStyle Normal
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe -m celery -A apps.api.main.celery_app beat --loglevel=info" -WindowStyle Normal
 
 # --- 启动前端 ---
 Write-Host "`n[完成] 启动完毕!" -ForegroundColor Green

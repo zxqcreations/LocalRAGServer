@@ -29,11 +29,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 重型运行时依赖（torch/sentence-transformers/mineru）不走 extras：
-# 本机 uv 0.11.13 不读 pyproject 索引配置（见 docs/spike/sm75-matrix.md §4），
-# GPU 版 torch 只能 `uv pip install --index https://download.pytorch.org/whl/cu126` 安装；
-# 若放进 extras，uv sync 会用 lock 中的 PyPI cpu 版覆盖 GPU 版。
-# 这些包统一 pip 管理（README §Windows 本机 GPU），Phase 1 修复 uv 问题后再回归 lock 管理。
+# GPU/本地嵌入依赖需要手动 pip 安装，不走 extras：
+#   uv sync --extra embed 会报错（embed 未定义），这是设计上的。
+# 因为 GPU torch 必须从 PyTorch CUDA index 安装，若放进 extras，
+# uv sync 会用 lock 中的 PyPI cpu 版覆盖 GPU 版（导致 CUDA unavailable）。
+# 正确做法：先 pip install GPU torch，再 uv sync（lock 不会覆盖已安装的包）。
+
 dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
