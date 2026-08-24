@@ -358,7 +358,9 @@ RAG_LLM_BASE_URL=http://127.0.0.1:9001/v1
 
 实测 29.7 t/s（RTX 2080 Ti 11GB）。
 
-#### 方案 B：vLLM（GPU 生产部署，推荐 Linux + NVIDIA）
+#### 方案 B：vLLM（GPU 生产部署，**仅推荐 Linux + NVIDIA GPU**）
+
+> **Windows 警告：** Python 3.13 + Windows 下 vLLM 无法正常工作（PyTorch cu126 index 最小版本 2.6+，而 vLLM wheel 需要旧版 torch ABI 匹配）。如需在 Windows 上运行完整 GPU 栈，请改用 CPU llama-server 方案 A，或安装 Python 3.12 + WSL2。
 
 ```bash
 pip install vllm
