@@ -182,7 +182,7 @@ flowchart LR
 
 | 表 | 关键字段 |
 |---|---|
-| knowledge_bases | id, name, type(document/code/web), owner, config |
+| knowledge_bases | id, name, kb_type(document/code/web), description, created_at |
 | documents | id, kb_id, title, source(path/url), content_hash, status, page_count, created_at |
 | chunks | id, doc_id, kb_id, parent_id, index, token_count, content, meta(jsonb) |
 | ingest_jobs | id, doc_id, stage, status, error, retries, worker_id |
@@ -227,17 +227,30 @@ flowchart LR
 { "success": true, "data": { }, "error": null, "meta": { "total": 10, "page": 1 } }
 ```
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/v1/kb` | 创建知识库（类型、解析配置） |
-| GET | `/api/v1/kb/{id}` | 知识库详情（文档数、索引状态） |
-| POST | `/api/v1/kb/{id}/documents` | 上传文档（multipart）或提交 URL |
-| GET | `/api/v1/kb/{id}/documents/{doc_id}` | 文档摄取状态（状态机进度） |
-| DELETE | `/api/v1/kb/{id}/documents/{doc_id}` | 删除文档及全部 chunk |
-| POST | `/api/v1/search` | 混合检索 + 重排，返回带引用 chunk |
-| POST | `/v1/chat/completions` | OpenAI 兼容 RAG 生成（流式 + citations） |
-| POST | `/v1/embeddings` | OpenAI 兼容嵌入代理 |
-| POST | `/v1/rerank` | 重排代理（Cohere 风格兼容） |
+### 9.1 REST API
+
+| 方法 | 路径 | 通道 | 说明 |
+|---|---|---|---|
+| POST | `/api/v1/kb` | Bearer | 创建知识库（仅主 Key） |
+| GET | `/api/v1/kb` | Bearer | 列表（ACL 过滤） |
+| GET | `/api/v1/kb/{id}` | Bearer | 知识库详情 |
+| POST | `/api/v1/kb/{id}/documents` | Bearer | 上传文档（multipart/form-data） |
+| POST | `/api/v1/kb/{id}/documents/url` | Bearer | URL 摄取（异步） |
+| GET | `/api/v1/kb/{id}/documents` | Bearer | 文档列表 |
+| GET | `/api/v1/kb/{id}/documents/{doc_id}` | Bearer | 文档摄取状态 |
+| DELETE | `/api/v1/kb/{id}/documents/{doc_id}` | Bearer | 删除文档及 chunk |
+| POST | `/api/v1/search` | Bearer | 混合检索 + 重排 |
+| POST | `/v1/chat/completions` | Bearer | OpenAI 兼容 RAG 生成（流式 + citations） |
+| POST | `/v1/embeddings` | Bearer | 嵌入代理 |
+| POST | `/v1/rerank` | Bearer | 重排代理 |
+| **POST** | `/admin/api/kb` | Cookie+CSRF | **管理端：创建知识库（admin）** |
+| **GET** | `/admin/api/kb/stats` | Cookie+CSRF | **管理端：全量 KB 统计（含文档/碎片/失败数）** |
+| **GET** | `/admin/api/kb/{id}` | Cookie+CSRF | **管理端：单 KB 详情（元数据 + 统计）** |
+| **PUT** | `/admin/api/kb/{id}` | Cookie+CSRF | **管理端：更新知识库（部分更新）** |
+| **DELETE** | `/admin/api/kb/{id}` | Cookie+CSRF | **管理端：级联删除 KB（ChunkRow→Annotation→Subscription→Document→KB）** |
+| **POST** | `/admin/api/kb/{id}/documents/upload-json` | Cookie+CSRF | **管理端：JSON+base64 文件上传** |
+| **GET** | `/admin/api/kb/{id}/documents` | Cookie+CSRF | **管理端：文档列表** |
+| **DELETE** | `/admin/api/kb/{id}/documents/{doc_id}` | Cookie+CSRF | **管理端：删除文档** |
 
 ### 9.2 MCP Server（供 Claude Code 等 Agent 直连）
 

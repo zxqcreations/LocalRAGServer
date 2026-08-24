@@ -32,6 +32,7 @@ class KnowledgeBase(SQLModel, table=True):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
     name: str
     kb_type: str = Field(default="document")  # document | code | web
+    description: str = ""  # 知识库简介（管理端增强）
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -169,21 +170,31 @@ class Registry:
         """启动期幂等 schema 自愈：create_all 只建表不补列，老库升级在此补列。
 
         adminsession 等管理表由 create_all 管理（未入 alembic 迁移，见架构注记），
-        安全审查 H-1 新增的 csrf_token 列需要对既有库补列；SQLite/PG 的
-        ALTER ADD COLUMN 带 DEFAULT 均幂等，新库由 create_all 直接建出。
+        安全审查 H-1 新增的 csrf_token 列需要对既有库补列；
+        knowledgebase.description 列需要对既有库补列；
+        SQLite/PG 的 ALTER ADD COLUMN 带 DEFAULT 均幂等，新库由 create_all 直接建出。
         """
-        if "adminsession" not in inspect(self._engine).get_table_names():
-            return
-        columns = {c["name"] for c in inspect(self._engine).get_columns("adminsession")}
-        if "csrf_token" in columns:
-            return
         with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    "ALTER TABLE adminsession ADD COLUMN "
-                    "csrf_token VARCHAR NOT NULL DEFAULT ''"
-                )
-            )
+            # --- adminsession.csrf_token (H-1) ---
+            if "adminsession" in inspect(self._engine).get_table_names():
+                columns = {c["name"] for c in inspect(self._engine).get_columns("adminsession")}
+                if "csrf_token" not in columns:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE adminsession ADD COLUMN "
+                            "csrf_token VARCHAR NOT NULL DEFAULT ''"
+                        )
+                    )
+            # --- knowledgebase.description (管理端增强) ---
+            if "knowledgebase" in inspect(self._engine).get_table_names():
+                columns = {c["name"] for c in inspect(self._engine).get_columns("knowledgebase")}
+                if "description" not in columns:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE knowledgebase ADD COLUMN "
+                            "description TEXT NOT NULL DEFAULT ''"
+                        )
+                    )
 
     def session(self) -> Iterator[Session]:
         with Session(self._engine) as s:
@@ -213,6 +224,76 @@ class Registry:
             return list(  # type: ignore[arg-type]
                 s.exec(select(KnowledgeBase).order_by(KnowledgeBase.created_at))
             )
+
+    def update_kb(
+        self,
+        kb_id: str,
+        name: str | None = None,
+        kb_type: str | None = None,
+        description: str | None = None,
+    ) -> KnowledgeBase:
+        """部分更新 KB（None 哨兵：未传入的字段保持不变）。"""
+        with Session(self._engine) as s:
+            kb = s.get(KnowledgeBase, kb_id)
+            if kb is None:
+                raise LookupError(f"知识库不存在：{kb_id}")
+            if name is not None:
+                kb.name = name
+            if kb_type is not None:
+                kb.kb_type = kb_type
+            if description is not None:
+                kb.description = description
+            s.add(kb)
+            s.commit()
+            s.refresh(kb)
+        return kb
+
+    def delete_kb(self, kb_id: str) -> None:
+        """级联删除 KB 及其所有关联数据（按依赖顺序删除以避免 FK 冲突）。"""
+        with Session(self._engine) as s:
+            # 1. ChunkRow（依赖 Document → KB）
+            doc_ids = [
+                d.id for d in s.exec(select(Document).where(Document.kb_id == kb_id)).all()  # type: ignore[attr-defined]
+            ]
+            if doc_ids:
+                s.exec(delete(ChunkRow).where(ChunkRow.doc_id.in_(doc_ids)))  # type: ignore[arg-type]
+            # 2. Annotation (by kb_id)
+            s.exec(delete(Annotation).where(Annotation.kb_id == kb_id))  # type: ignore[arg-type]
+            # 3. UrlSubscription (by kb_id)
+            s.exec(delete(UrlSubscription).where(UrlSubscription.kb_id == kb_id))  # type: ignore[arg-type]
+            # 4. IngestJob (by kb_id)
+            s.exec(delete(IngestJob).where(IngestJob.kb_id == kb_id))  # type: ignore[arg-type]
+            # 5. Document (by kb_id) — 同时清了 chunkrow by doc_id above
+            s.exec(delete(Document).where(Document.kb_id == kb_id))  # type: ignore[arg-type]
+            # 6. KnowledgeBase
+            s.delete(s.get(KnowledgeBase, kb_id))
+            s.commit()
+
+    def get_kb_stats(self, kb_id: str) -> dict:
+        """返回 KB 统计信息 {doc_count, chunk_count, failed_count}。"""
+        with Session(self._engine) as s:
+            docs = s.exec(select(Document).where(Document.kb_id == kb_id)).all()  # type: ignore[arg-type]
+            doc_count = len(docs)
+            failed_count = sum(1 for d in docs if d.status == "failed")
+            total_chunks = sum(d.chunk_count for d in docs)
+            return {"doc_count": doc_count, "chunk_count": total_chunks, "failed_count": failed_count}
+
+    def list_kbs_enriched(self) -> list[dict]:
+        """列出所有 KB，附带文档数和碎片数。"""
+        results = []
+        with Session(self._engine) as s:
+            kbs = s.exec(select(KnowledgeBase).order_by(KnowledgeBase.created_at)).all()  # type: ignore[arg-type]
+            for kb in kbs:
+                stats = self.get_kb_stats(kb.id)
+                results.append({
+                    "id": kb.id,
+                    "name": kb.name,
+                    "kb_type": kb.kb_type,
+                    "description": kb.description,
+                    "created_at": kb.created_at.isoformat(),
+                    **stats,
+                })
+        return results
 
     # ---------- 文档 ----------
 

@@ -42,13 +42,24 @@ class KbCreate(BaseModel):
     kb_type: str = Field(default="document", pattern="^(document|code|web)$")
 
 
+class KbUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    kb_type: str = Field(default="document", pattern="^(document|code|web)$")
+    description: str = Field(default="", max_length=500)
+
+
 class KbOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     name: str
     kb_type: str
+    description: str = ""
     created_at: datetime
+    # 可选统计字段（仅在 enriched 查询中填充）
+    doc_count: int | None = None
+    chunk_count: int | None = None
+    failed_count: int | None = None
 
 
 class DocumentOut(BaseModel):

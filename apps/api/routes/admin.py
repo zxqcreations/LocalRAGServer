@@ -185,12 +185,10 @@ def me(request: Request):
 
 @router.get("/kb", response_model=Envelope[list[dict]])
 def list_kbs(registry: RegistryDep):
-    return ok(
-        [
-            {"id": k.id, "name": k.name, "kb_type": k.kb_type}
-            for k in registry.list_kbs()
-        ]
-    )
+    """管理端 KB 列表（增强版：含文档数/碎片数）。"""
+    # 延迟导入避免循环依赖
+    from apps.api.routes.admin_kb import _enriched_list_compat as _elc
+    return ok(_elc(registry))
 
 
 @router.get("/metrics", response_model=Envelope[dict])

@@ -73,4 +73,50 @@ export const api = {
   listAnnotations: (kb_id) => request("GET", `/admin/api/annotations?kb_id=${kb_id}`),
   searchDebug: (kb_id, query) =>
     request("POST", "/admin/api/search-debug", { kb_id, query }),
+  // ---------- KB CRUD ----------
+  createKb: (name, kb_type, description) =>
+    request("POST", "/admin/api/kb", { name, kb_type, description }),
+  listKbStats: () => request("GET", "/admin/api/kb/stats"),
+  getKbDetail: (kb_id) => request("GET", `/admin/api/kb/${kb_id}`),
+  updateKb: (kb_id, data) => request("PUT", `/admin/api/kb/${kb_id}`, data),
+  deleteKb: (kb_id) => request("DELETE", `/admin/api/kb/${kb_id}`),
+  listDocs: (kb_id) => request("GET", `/admin/api/kb/${kb_id}/documents`),
+  deleteDoc: (kb_id, doc_id) => request("DELETE", `/admin/api/kb/${kb_id}/documents/${doc_id}`),
+  // 文件上传（base64 JSON，避免 multipart 代理问题）
+  uploadDocument: (kb_id, filename, base64Data) =>
+    request("POST", `/admin/api/kb/${kb_id}/documents/upload-json`, { filename, data: base64Data }),
+  // ---------- Subscriptions (复用已有后端接口) ----------
+  listSubscriptions: (kb_id) => request("GET", `/admin/api/subscriptions?kb_id=${kb_id}`),
+  createSubscription: (kb_id, url, interval_hours) =>
+    request("POST", "/admin/api/subscriptions", { kb_id, url, interval_hours }),
+  toggleSubscription: (sub_id, enabled) =>
+    request("POST", `/admin/api/subscriptions/${sub_id}/toggle`, { enabled }),
+  deleteSubscription: (sub_id) => request("DELETE", `/admin/api/subscriptions/${sub_id}`),
 };
+
+// ---------- multipart/form-data 上传 helper ----------
+
+// 导出 csrfToken（供文件上传等直接 fetch 场景使用）
+export const getCsrfToken = () => csrfToken;
+
+// 别名：旧代码可能直接 import listKbStats
+export const listKbStats = () => api.listKbStats();
+
+export async function apiUpload(path, formData) {
+  const headers = {};
+  if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  const resp = await fetch(path, {
+    method: "POST",
+    headers,
+    body: formData,
+    credentials: "same-origin",
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!data.success) {
+    const err = new Error(data.error?.message || `HTTP ${resp.status}`);
+    err.code = data.error?.code;
+    err.status = resp.status;
+    throw err;
+  }
+  return data.data;
+}

@@ -2,7 +2,7 @@
   <div class="shell">
     <aside class="nav">
       <h1 class="brand">LocalRAG</h1>
-      <router-link to="/">知识库</router-link>
+      <router-link to="/">知识库管理</router-link>
       <router-link to="/playground">检索调试台</router-link>
       <router-link to="/keys">API Key</router-link>
       <router-link to="/monitor">系统监控</router-link>
@@ -92,4 +92,18 @@ input, textarea, select {
 label { display: block; font-size: 12px; color: var(--soft); margin-bottom: 4px; }
 .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
 .ok { color: var(--ok); }
+
+/* ---- Shared utility classes ---- */
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.dialog { background: var(--panel); border-radius: 8px; padding: 24px 28px; max-width: 520px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+.dialog h3 { margin: 0 0 16px; font-size: 16px; }
+.dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+.cancel-btn { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; cursor: pointer; font-size: 14px; color: var(--soft); }
+.cancel-btn:hover { background: #f5f5f5; }
+.badge { display: inline-block; min-width: 20px; text-align: center; border-radius: 10px; font-size: 11px; padding: 2px 6px; font-weight: 600; }
+.badge-fail { background: var(--bad); color: #fff; }
+.badge-ok { color: var(--soft); background: transparent; }
+.mono { font-family: monospace; }
+.empty-hint { text-align: center; color: var(--soft); padding: 16px 0; font-size: 13px; }
 </style>

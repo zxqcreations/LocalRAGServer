@@ -8,7 +8,9 @@
 
 当前状态：**v1.0.0**（2026-08-16 发布）——Phase 0-6 全部达成：
 安全审计 / 备份恢复 / SLO 压测（万级 P95 160ms）/ 故障演练 / 发布回滚 /
-Web 管理端 / RAGAS 评测闭环 / URL 订阅爬取。
+Web 管理端（含 KB 全生命周期管理、文档上传、URL 订阅、ID 确认删除）/ RAGAS 评测闭环 / URL 订阅爬取。
+
+开发中：**v1.2.0** — 知识库管理前端增强（KB CRUD / 详情页 / 文档上传 / URL 订阅 UI）。
 
 ## 快速开始
 
@@ -32,7 +34,7 @@ uv run python scripts/worker.py --beat          # 摄取 worker + URL 订阅调�
 |---|---|
 | OpenAI 兼容 REST | `/v1/chat/completions`（rag_kb_id 扩展字段）+ `/api/v1/*` 检索/文档 |
 | MCP | stdio transport 5 工具（v1.0；streamable HTTP 见 ADR-006，v1.1） |
-| Web 管理端 | Vue3 五模块（登录/知识库/调试台/Key/监控） |
+| Web 管理端 | Vue3 六模块（登录/**知识库管理**（含创建/编辑/删除 + KB 详情：上传文档/URL订阅/文档列表）/调试台/Key/监控/评估面板） |
 
 ## API 示例
 

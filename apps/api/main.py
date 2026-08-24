@@ -21,7 +21,7 @@ from apps.api.errors import (
     AUTH_UNCONFIGURED,
     RATE_LIMITED,
 )
-from apps.api.routes import admin, chat, documents, kb, search
+from apps.api.routes import admin, admin_kb, chat, documents, kb, search
 from apps.api.routes.admin import COOKIE_NAME
 from apps.api.schemas import err
 from core.config import Settings, get_settings
@@ -155,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(search.router, prefix="/api/v1", tags=["检索"])
     app.include_router(chat.router, prefix="/v1", tags=["Chat"])
     app.include_router(admin.router, tags=["管理端"])
+    app.include_router(admin_kb.router, tags=["知识库管理"])
 
     @app.get("/health", tags=["运维"])
     def health():

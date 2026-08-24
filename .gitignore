@@ -23,6 +23,7 @@ models/*
 
 # 日志
 *.log
+claude_session_id
 
 # IDE
 .idea/

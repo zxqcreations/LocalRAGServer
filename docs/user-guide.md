@@ -1,6 +1,6 @@
 # LocalRAGServer 用户使用文档
 
-> 版本：v1.0.0（2026-08-16）· 面向：部署者 / Agent 接入者 / 管理端使用者
+> 版本：v1.2.0-dev · 面向：部署者 / Agent 接入者 / 管理端使用者
 
 ## 1. 快速开始
 
@@ -78,7 +78,8 @@ uv run python scripts/smoke.py            # 全链路冒烟（上传→检索→
 
 | 模块 | 功能 |
 |---|---|
-| 知识库 | 创建/列表/详情 |
+| 知识库管理 | 创建 / 编辑 / 删除（ID 确认保护）；按 KB 维度查看统计（文档数、碎片数、失败数）；点击进入详情页 |
+| KB 详情页 | 元数据卡片（名称/类型/ID/创建时间/描述/统计）；文档上传（支持拖拽选择）；文档列表（标题/状态徽章/碎片数/错误）；URL 订阅管理（新增/启用-禁用/删除） |
 | 检索调试台 | 三阶段调试（dense/sparse/融合）+ 人工标注（沉淀为评测集） |
 | API Key | 签发（明文仅显示一次）/吊销（KB 级 ACL） |
 | 系统监控 | 指标分位数 + 审计日志 |
@@ -87,14 +88,43 @@ uv run python scripts/smoke.py            # 全链路冒烟（上传→检索→
 角色两档：**admin**（全部操作）/ **readonly**（只读，无任何变更与敏感读）。
 服务端强制首次改密（改密前业务端点 403）。
 
+**安全注意：** KB 和文档的删除操作需弹窗确认——在文本框中输入完整的 ID（32 位十六进制字符），输入匹配后按钮才可点击。这是防误删的核心机制。
+
 ## 4. 知识库与文档管理
 
-### 4.1 上传文档
+### 4.1 在 Web 管理端操作 KB
+
+1. **登录管理端**：访问 `http://127.0.0.1:5173`，使用初始密码登录后强制改密。
+2. **创建 KB**：点击「知识库管理」→「创建知识库」→填写名称、类型（document/code/web）、简介→确认。
+3. **查看统计**：列表中实时显示每个 KB 的文档数、碎片总数、失败任务数（红色 badge）。
+4. **进入详情**：点击 KB 名称进入详情页，可查看元数据、上传文档、管理 URL 订阅。
+5. **删除 KB**：需在弹窗中精确输入 KB ID（32 位 hex），匹配后确认。
+
+### 4.2 上传文档
+
+#### 通过 Web 管理端
+
+在 KB 详情页点击「上传文档」按钮，选择文件后自动触发同步摄取管线（解析→分块→向量化→入库）。完成后刷新页面即可看到新文档及其状态徽章（就绪/失败/进行中）。
+
+#### 通过 REST API
+
+```bash
+# multipart/form-data（需 API Key）
+curl -X POST http://127.0.0.1:8000/api/v1/kb/{kb_id}/documents \
+  -H "Authorization: Bearer $RAG_API_KEY" -F "file=@paper.pdf"
+
+# 或 JSON + base64（通过 admin 端点，需 Cookie+CSRF）
+curl -X POST http://127.0.0.1:8000/admin/api/kb/{kb_id}/documents/upload-json \
+  -H "Cookie: rag_admin_session=<SESSION>" \
+  -H "X-CSRF-Token: <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "paper.pdf", "data": "<base64-encoded-content>"}'
+```
 
 支持 PDF/Word/Markdown/代码/网页/EPUB 等；魔数与扩展名双重校验；
 单文件 ≤200MB、PDF ≤1000 页；同内容重复上传幂等（返回已有文档）。
 
-### 4.2 URL 摄取（单次）
+### 4.3 URL 摄取（单次）
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/kb/{kb_id}/documents/url \
@@ -104,10 +134,31 @@ curl -X POST http://127.0.0.1:8000/api/v1/kb/{kb_id}/documents/url \
 
 SSRF 五层防护全程生效（协议白名单/全 IP 解析校验/逐跳重验/大小上限/固定 IP 连接）。
 
-### 4.3 URL 订阅爬取（增量）
+### 4.4 URL 订阅爬取（增量）
 
-管理端「订阅」API（admin 角色）创建订阅（URL + 周期）；worker `--beat`
-每 10 分钟扫描到期订阅：内容哈希变化 → 自动重索引（旧版保留）；
+#### 通过 Web 管理端
+
+在 KB 详情页的「URL 订阅」区域，点击「新增订阅」→填入 URL 和抓取间隔（1h/24h/7天）→确认。
+之后可在订阅列表中启用/禁用/删除单个订阅。
+
+#### 通过管理端 API（admin 角色）
+
+```bash
+# 创建订阅
+curl -X POST http://127.0.0.1:8000/admin/api/subscriptions \
+  -H "Cookie: rag_admin_session=<SESSION>" \
+  -H "X-CSRF-Token: <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"kb_id": "<kb_id>", "url": "https://example.com/page", "interval_hours": 24}'
+
+# 切换启用/禁用
+curl -X POST http://127.0.0.1:8000/admin/api/subscriptions/<sub_id>/toggle \
+  -H "Cookie: ..." -H "X-CSRF-Token: ..." \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+worker `--beat` 每 10 分钟扫描到期订阅：内容哈希变化 → 自动重索引（旧版保留）；
 未变化零成本。抓取失败自动退避并记录。
 
 ## 5. API 使用
@@ -153,10 +204,37 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 - 返回 citations（文档标题/分数/来源）
 - `stream: true` → SSE 流式
 
-### 5.4 管理端 API
+### 5.4 管理端 API（session 认证）
 
-`/admin/api/*`：登录（Cookie 会话 + CSRF token）/ 改密 / 登出 / KB / API Key /
-订阅 / 标注 / 审计 / 指标。管理端与 API Key 通道彻底隔离（Bearer 被显式拒绝）。
+所有 `/admin/api/*` 端点使用 Cookie 会话（`rag_admin_session` HttpOnly Cookie）+ CSRF token（`X-CSRF-Token` 头）。
+与 API Key Bearer 通道完全隔离（Bearer 请求到达管理端路由时会被 403 拒绝）。
+
+| Method | Path | 角色 | 说明 |
+|--------|------|------|------|
+| POST | `/login` | public | 登录（返回 `username`/`role`/`csrf_token`） |
+| POST | `/change-password` | authed | 修改密码 |
+| GET | `/me` | authed | 当前用户信息 + CSRF token |
+| GET | `/kb` | any | 增强版 KB 列表（含 doc_count/chunk_count/failed_count） |
+| POST | `/kb` | admin | 创建知识库 |
+| PUT | `/kb/{id}` | admin | 更新知识库（部分更新） |
+| DELETE | `/kb/{id}` | admin | 级联删除 KB |
+| GET | `/kb/stats` | any | 全量 KB 统计数据 |
+| GET | `/kb/{id}` | any | 单 KB 详情（元数据 + 统计） |
+| POST | `/kb/{id}/documents/upload-json` | admin | JSON+base64 文件上传 |
+| GET | `/kb/{id}/documents` | any | KB 下文档列表 |
+| DELETE | `/kb/{id}/documents/{doc_id}` | admin | 删除文档 |
+| POST | `/keys` | admin | 签发 API Key |
+| GET | `/keys` | admin | 列出 API Key |
+| DELETE | `/keys/{id}` | admin | 吊销 Key |
+| GET | `/metrics` | any | 系统指标快照 |
+| GET | `/audit?limit=N` | any | 审计日志（上限 500） |
+| POST | `/annotations` | admin | 人工标注 |
+| GET | `/annotations?kb_id=...` | admin | 标注列表 |
+| POST | `/search-debug` | any | 三阶段检索调试 |
+| POST | `/subscriptions` | admin | 创建 URL 订阅 |
+| GET | `/subscriptions?kb_id=...` | any | 订阅列表 |
+| POST | `/subscriptions/{id}/toggle` | admin | 启用/禁用订阅 |
+| DELETE | `/subscriptions/{id}` | admin | 删除订阅 |
 
 ### 5.5 MCP 接入（Agent 直连）
 
