@@ -88,9 +88,22 @@ def upload_document(
             head = f.read(_SIGNATURE_BYTES)
         if not check_signature(suffix, head):
             raise_http(415, INVALID_FILE_CONTENT, f"文件内容与扩展名 {suffix} 不符")
-        doc = search_service.ingest_file(
-            kb_id, dest, title=filename, source=f"upload://{filename}"
-        )
+        # 调试：打印文件信息帮助排查
+        import logging
+        _logger = logging.getLogger("local_rag_server")
+        _logger.warning("Upload", detail={
+            "kb_id": kb_id,
+            "filename": filename,
+            "dest": str(dest),
+            "dest_size": dest.stat().st_size,
+        })
+        try:
+            doc = search_service.ingest_file(
+                kb_id, dest, title=filename, source=f"upload://{filename}"
+            )
+        except Exception as exc:
+            _logger.exception("Ingest failed", detail={"kb_id": kb_id, "filename": filename, "error": str(exc)})
+            raise
         registry.record_audit(
             actor=getattr(request.state, "actor", ""),
             action="ingest",

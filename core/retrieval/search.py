@@ -81,7 +81,19 @@ class SearchService:
 
         title/source 用于保留上传时的原始文件名（本地落盘可能是临时文件名）。
         """
-        parsed = parse_file(path, max_pages=self._max_pdf_pages)
+        import logging
+        _logger = logging.getLogger("local_rag_server")
+        try:
+            _logger.warning("Ingest start", detail={
+                "kb_id": kb_id,
+                "path": str(path),
+                "title": title,
+                "source": source,
+            })
+            parsed = parse_file(path, max_pages=self._max_pdf_pages)
+        except Exception as exc:
+            _logger.exception("ParseFile failed", detail={"path": str(path), "error": str(exc)})
+            raise
         content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
 
         existing = self._registry.find_document_by_hash(kb_id, content_hash)
