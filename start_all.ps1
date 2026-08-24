@@ -9,7 +9,7 @@ param(
     [ValidateSet("stub", "local")]
     [string]$EmbeddingBackend = "local",
     [ValidateSet("no-llm", "with-llm")]
-    [string]$LlmMode = "with-llm"
+    [string]$LlmMode = "no-llm"
 )
 
 # uv sync --extra embed 帮助：为什么报错及正确安装步骤
@@ -129,7 +129,7 @@ try {
 
 # --- 启动 Worker + Beat ---
 Write-Host "[6/6] 启动 Worker + Beat (摄取任务)..." -ForegroundColor Green
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe -m celery -A apps.api.main.celery_app worker --pool=solo --loglevel=info" -WindowStyle Normal
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe scripts/worker.py --beat" -WindowStyle Normal
 Start-Sleep -Seconds 1
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$ROOT'; .venv\Scripts\python.exe -m celery -A apps.api.main.celery_app beat --loglevel=info" -WindowStyle Normal
 
