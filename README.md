@@ -26,7 +26,7 @@ uv run uvicorn apps.api.main:create_app --factory --host 127.0.0.1 --port 8000
 uv run python scripts/worker.py --beat          # 摄取 worker + URL 订阅调度
 ```
 
-详细步骤（模型部署/管理端/运维）见 [docs/user-guide.md](docs/user-guide.md)。
+详细步骤（llama-server/vLLM 部署 / 管理端 / 运维）见 [docs/user-guide.md](docs/user-guide.md)。
 
 ## 接入方式
 

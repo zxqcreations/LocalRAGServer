@@ -294,16 +294,35 @@ uv pip install torch --index https://download.pytorch.org/whl/cu126   # 实测 T
 RAG_EMBEDDING_BACKEND=local   # 启动时加载 BAAI/bge-m3（HF 缓存离线可用）
 ```
 
-### 6.2 生成（llama-server）
+### 6.2 生成（llama-server / vLLM）
+
+项目使用 Qwen3-8B 作为回答生成模型，支持两种服务端：
+
+#### 方案 A：llama-server（CPU / 轻量 GPU，开发默认）
 
 ```bash
+# 本地已有模型（约 5.2GB）在 models/gguf/Qwen3-8B-Q4_K_M.gguf
 models/llamacpp/llama-server.exe -m models/gguf/Qwen3-8B-Q4_K_M.gguf \
   --host 127.0.0.1 --port 9001 -ngl 40 -c 8192
 RAG_LLM_BASE_URL=http://127.0.0.1:9001/v1
 ```
 
-实测 29.7 t/s（RTX 2080 Ti 11GB）。模型文件经 models/MANIFEST.json 管理，
-旧版本保留 ≥72h（回滚契约）。
+实测 29.7 t/s（RTX 2080 Ti 11GB）。
+
+#### 方案 B：vLLM（GPU 生产部署，推荐 Linux + NVIDIA）
+
+```bash
+pip install vllm
+vllm serve Qwen/Qwen3-8B-AWQ --port 9001 --quantization awq
+
+# .env 中无需修改（默认值已是 http://127.0.0.1:9001/v1）
+RAG_LLM_BASE_URL=http://127.0.0.1:9001/v1
+RAG_LLM_MODEL=Qwen3-8B-AWQ   # 配置模型名，与 vLLM 服务加载的模型对应
+```
+
+AWQ 量化使显存降至约 6GB。实测吞吐 >50 t/s，满足 Agent 场景延迟要求。
+
+模型文件统一经 `models/MANIFEST.json` 管理，旧版本保留 ≥72h（回滚契约）。
 
 ### 6.3 向量库（生产形态）
 
