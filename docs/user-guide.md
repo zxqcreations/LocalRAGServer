@@ -46,9 +46,8 @@ uv sync --extra embed   # 仅 embedding_backend=local 时需要
 # API 服务
 uv run uvicorn apps.api.main:create_app --factory --host 127.0.0.1 --port 8000
 
-# Worker（摄取任务消费；--beat 同时启动 URL 订阅调度）
-uv run celery -A apps.api.main.celery_app worker --pool=solo --loglevel=info
-uv run celery -A apps.api.main.celery_app beat --loglevel=info
+# Worker + Beat（摄取任务消费 + URL 订阅调度，一条命令即可）
+uv run python scripts/worker.py --beat   # --beat 启动 beat；无 --beat 仅消费任务
 
 # 首次启动会在 data/admin_initial_password 生成初始管理密码（日志可见），
 # 登录管理端后强制修改（明文文件改密后自动销毁）
@@ -432,7 +431,8 @@ uv run python -m eval.run_retrieval --check-baseline  # 检索回归门禁
 | 管理端 403 password_change_required | 首次登录必须先改密（服务端强制） |
 | 检索慢（万级） | 确认 RAG_QDRANT_URL 已切 server 模式（本地模式 brute-force） |
 | 未知 RAG_* 报错 | 环境变量拼写错误（fail-fast 提示） |
-| **上传/搜索 500** | `RAG_EMBEDDING_BACKEND=local` 但 torch/sentence-transformers 未安装。修复：`RAG_EMBEDDING_BACKEND=stub` 或 `uv sync --extra embed` |
+| **上传/搜索 500** | `RAG_EMBEDDING_BACKEND=local` 但 torch/sentence-transformers 未安装。修复：`RAG_EMBEDDING_BACKEND=stub` 或按 §6.1 手动 pip 安装 GPU torch → `uv sync --extra dev` |
+| **PDF 上传/搜索 500 [Errno 22]** | PDF 中的 null bytes / 非法 UTF-8 导致文本管道断裂。服务端已自动清理不可打印字符，如遇仍报此错误请检查 PDF 文件是否损坏 |
 | **启动后只有 /health OK** | Embedding 后端初始化失败导致整个 pipeline 断裂。检查日志中的 ImportError，切换为 stub 快速验证 |
 
 ## 10. 快速命令索引

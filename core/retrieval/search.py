@@ -3,7 +3,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.ingest.chunker import chunk_text
+from core.ingest.chunker import Chunk, chunk_text
 from core.ingest.parsers import parse_file
 from core.retrieval.hybrid import HybridRetriever
 from core.retrieval.parent import expand_parents
@@ -109,7 +109,15 @@ class SearchService:
             raise EmptyDocumentError(f"文档 {title} 解析后无文本内容")
 
         # 再次清理 chunk 文本（防止 chunker 产生含二进制内容的字符串）
-        chunks = [Chunk(index=c.index, text=c.text.encode("utf-8", errors="replace").decode("utf-8")) for c in chunks]
+        chunks = [
+            Chunk(
+                index=c.index,
+                text=c.text.encode("utf-8", errors="replace").decode("utf-8"),
+                start=c.start,
+                end=c.end,
+            )
+            for c in chunks
+        ]
 
         doc = self._registry.create_document(
             kb_id=kb_id,
