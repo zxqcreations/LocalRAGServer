@@ -71,7 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # 审计 F-01：对外暴露需显式确认，启动时打印安全警告
             _logger.warning(
                 "non_loopback_bind",
-                detail=(
+                (
                     f"服务绑定 {settings.host}（非回环地址）。"
                     f"API Key：{'已配置' if settings.api_key else '未配置（fail-closed）'}"
                 ),

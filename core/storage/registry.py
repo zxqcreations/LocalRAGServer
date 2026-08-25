@@ -353,16 +353,19 @@ class Registry:
 
     def set_chunks(self, doc_id: str, kb_id: str, chunks: list[Chunk]) -> list[str]:
         """替换该文档的全部 chunk（幂等重摄入），返回 chunk id 列表。"""
-        rows = [
-            ChunkRow(
-                id=uuid.uuid4().hex,
-                kb_id=kb_id,
-                doc_id=doc_id,
-                index=c.index,
-                content=c.text,
+        rows = []
+        for c in chunks:
+            # 清理文本中可能导致 SQLite 写入失败的非法字符（Windows/SQLite 兼容性）
+            text = c.text.encode("utf-8", errors="replace").decode("utf-8")
+            rows.append(
+                ChunkRow(
+                    id=uuid.uuid4().hex,
+                    kb_id=kb_id,
+                    doc_id=doc_id,
+                    index=c.index,
+                    content=text,
+                )
             )
-            for c in chunks
-        ]
         with Session(self._engine) as s:
             s.exec(delete(ChunkRow).where(ChunkRow.doc_id == doc_id))  # type: ignore[arg-type]
             doc = s.get(Document, doc_id)

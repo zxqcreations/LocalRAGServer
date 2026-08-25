@@ -91,7 +91,7 @@ def upload_document(
         # 调试：打印文件信息帮助排查
         import logging
         _logger = logging.getLogger("local_rag_server")
-        _logger.warning("Upload", detail={
+        _logger.warning("Upload", {
             "kb_id": kb_id,
             "filename": filename,
             "dest": str(dest),
@@ -102,7 +102,7 @@ def upload_document(
                 kb_id, dest, title=filename, source=f"upload://{filename}"
             )
         except Exception as exc:
-            _logger.exception("Ingest failed", detail={"kb_id": kb_id, "filename": filename, "error": str(exc)})
+            _logger.exception("Ingest failed", {"kb_id": kb_id, "filename": filename, "error": str(exc)})
             raise
         registry.record_audit(
             actor=getattr(request.state, "actor", ""),

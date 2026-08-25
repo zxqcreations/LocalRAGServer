@@ -84,19 +84,21 @@ class SearchService:
         import logging
         _logger = logging.getLogger("local_rag_server")
         try:
-            _logger.warning("Ingest start", detail={
+            _logger.warning("Ingest start", {
                 "kb_id": kb_id,
                 "path": str(path),
                 "title": title,
                 "source": source,
             })
+            print(1, path, title, source)
             parsed = parse_file(path, max_pages=self._max_pdf_pages)
         except Exception as exc:
-            _logger.exception("ParseFile failed", detail={"path": str(path), "error": str(exc)})
+            _logger.exception("ParseFile failed", {"path": str(path), "error": str(exc)})
             raise
         content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
 
         existing = self._registry.find_document_by_hash(kb_id, content_hash)
+        print(1.5, path, existing.error if existing else None)
         if existing is not None:
             return existing
 
@@ -111,6 +113,7 @@ class SearchService:
             source=source or str(Path(path)),
             content_hash=content_hash,
         )
+        print(2, path, doc.id, len(chunks))
         try:
             vectors = self._embedder.embed([c.text for c in chunks])
             chunk_ids = self._registry.set_chunks(doc.id, kb_id, chunks)
@@ -128,6 +131,7 @@ class SearchService:
             self._registry.mark_document_failed(doc.id, str(exc))
             raise
         result = self._registry.get_document(kb_id, doc.id)
+        print(3, path, result)
         if result is None:
             raise RuntimeError(f"文档 {doc.id} 摄取后未找到（数据不一致）")
         return result
