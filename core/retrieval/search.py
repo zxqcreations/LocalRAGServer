@@ -149,10 +149,32 @@ class SearchService:
 
     def debug_search(self, kb_id: str, query: str, top_k: int = 5) -> dict:
         """调试台三阶段数据（审计 F17：粗排→融合→重排同一中间结构，前端只渲染）。"""
+        # 诊断嵌入向量的差异性：如果所有 chunk 都相同，cosine 就全是 1.0
+        import math
+        test_vecs = self._embedder.embed(["test unique string alpha beta", "totally different xyz query zzz"])
+        norms = [math.sqrt(sum(x*x for x in v)) for v in test_vecs]
+        diff_sq = sum((a-b)**2 for a,b in zip(test_vecs[0], test_vecs[1]))
+        print(f"[DEBUG EMBED] norms={norms} diff_sq={diff_sq:.4f} "
+              f"v1_first5={[round(v,4) for v in test_vecs[0][:5]]} "
+              f"v2_first5={[round(v,4) for v in test_vecs[1][:5]]}")
+        if diff_sq < 0.001:
+            print("[WARN] Embeddings 几乎完全相同！embedder 可能未正确工作")
+
         vector = self._embedder.embed([query])[0]
+        vec_norm = math.sqrt(sum(x * x for x in vector))
+        print(f"[DEBUG QUERY] dim={len(vector)} norm={vec_norm:.6f} "
+              f"first5={[round(v, 4) for v in vector[:5]]}")
         hybrid = self._get_hybrid(kb_id)
+        # 诊断：检查存储向量是否都相同
+        chunk_list = self._registry.list_chunks(kb_id)
+        chunk_vols = len(chunk_list)
+        print(f"[DEBUG STORE] kb={kb_id} chunks={chunk_vols}")
+        if chunk_vols > 0 and chunk_vols <= 5:
+            first_content = chunk_list[0][1][:50]
+            print(f"[DEBUG STORE] first_chunk_content_sample='{first_content}'...")
         # 阶段 1：粗排（dense + sparse 各自候选）
         dense = self._store.search(vector, kb_id, limit=self._retrieval_top_k)
+        print(f"[DEBUG DENSE] top3_scores={[round(p.score,4) for p in dense[:3]]}")
         sparse = hybrid._bm25.search(query, top_k=self._retrieval_top_k)  # noqa: SLF001 同包调试接口
         chunk_ids = [h.chunk_id for h in hybrid.search(query, vector, top_k=top_k)]
         contents = self._registry.get_chunk_contents(chunk_ids)
