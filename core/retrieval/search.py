@@ -90,12 +90,13 @@ class SearchService:
                 "title": title,
                 "source": source,
             })
-            print(1, path, title, source)
             parsed = parse_file(path, max_pages=self._max_pdf_pages)
         except Exception as exc:
             _logger.exception("ParseFile failed", {"path": str(path), "error": str(exc)})
             raise
-        content_hash = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
+        # 清理文本（null bytes / 非法 UTF-8 会导致 SQLite 写入失败）
+        clean_text = parsed.text.encode("utf-8", errors="replace").decode("utf-8")
+        content_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()
 
         existing = self._registry.find_document_by_hash(kb_id, content_hash)
         print(1.5, path, existing.error if existing else None)
@@ -103,9 +104,12 @@ class SearchService:
             return existing
 
         title = title or parsed.title
-        chunks = chunk_text(parsed.text, self._chunk_size, self._overlap)
+        chunks = chunk_text(clean_text, self._chunk_size, self._overlap)
         if not chunks:
             raise EmptyDocumentError(f"文档 {title} 解析后无文本内容")
+
+        # 再次清理 chunk 文本（防止 chunker 产生含二进制内容的字符串）
+        chunks = [Chunk(index=c.index, text=c.text.encode("utf-8", errors="replace").decode("utf-8")) for c in chunks]
 
         doc = self._registry.create_document(
             kb_id=kb_id,
@@ -113,7 +117,6 @@ class SearchService:
             source=source or str(Path(path)),
             content_hash=content_hash,
         )
-        print(2, path, doc.id, len(chunks))
         try:
             vectors = self._embedder.embed([c.text for c in chunks])
             chunk_ids = self._registry.set_chunks(doc.id, kb_id, chunks)
@@ -128,10 +131,10 @@ class SearchService:
             self._store.upsert(points)
             self._invalidate_hybrid(kb_id)
         except Exception as exc:
-            self._registry.mark_document_failed(doc.id, str(exc))
+            self._registry.mark_document_failed(doc.id, f"{type(exc).__name__}: {exc}")
+            _logger.error("Ingest failed for doc %s", doc.id, exc_info=True)
             raise
         result = self._registry.get_document(kb_id, doc.id)
-        print(3, path, result)
         if result is None:
             raise RuntimeError(f"文档 {doc.id} 摄取后未找到（数据不一致）")
         return result

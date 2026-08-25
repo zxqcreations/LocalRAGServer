@@ -117,6 +117,10 @@ def upload_document(
         raise_http(422, TOO_MANY_PAGES, str(exc))
     except EmptyDocumentError as exc:
         raise_http(422, EMPTY_DOCUMENT, str(exc))
+    except Exception as exc:
+        # 捕获 ingest_pipeline 中未处理的异常（PyMuPDF / SQLite / embedder 等）
+        _logger.exception("Upload failed unexpectedly", {"kb_id": kb_id, "filename": filename})
+        raise
     finally:
         dest.unlink(missing_ok=True)
     return ok(DocumentOut.model_validate(doc))
