@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from apps.api.deps import get_registry, get_search_service, get_settings
@@ -68,9 +68,15 @@ def create_kb(body: KbUpdate, request: Request, registry: RegistryDep):
 
 
 @router.get("/kb/stats", response_model=Envelope[list[dict]])
-def list_kb_stats(registry: RegistryDep):
-    """列出所有 KB 及其统计信息（any 角色可用）。"""
-    return ok(registry.list_kbs_enriched())
+def list_kb_stats(
+    registry: RegistryDep,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+):
+    """列出所有 KB 及其统计信息（any 角色可用）。支持分页。"""
+    total = registry.count_kbs()
+    items = registry.list_kbs_enriched(page, page_size)
+    return ok(items, meta={"total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/kb/{kb_id}", response_model=Envelope[KbOut])
@@ -140,8 +146,13 @@ def delete_kb_route(kb_id: str, request: Request, registry: RegistryDep):
 
 
 @router.get("/kb/{kb_id}/documents", response_model=Envelope[list[DocumentOut]])
-def list_kb_documents(kb_id: str, registry: RegistryDep):
-    """列出某 KB 下的所有文档（any 角色可用）。"""
+def list_kb_documents(
+    kb_id: str,
+    registry: RegistryDep,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+):
+    """列出某 KB 下的所有文档（any 角色可用）。支持分页。"""
     from core.security.acl import require_kb_access
 
     try:
@@ -150,8 +161,12 @@ def list_kb_documents(kb_id: str, registry: RegistryDep):
         pass
     if registry.get_kb(kb_id) is None:
         raise_http(404, KB_NOT_FOUND, "知识库不存在")
-    docs = registry.list_documents(kb_id)
-    return ok([DocumentOut.model_validate(d) for d in docs])
+    total = registry.count_documents(kb_id)
+    docs = registry.list_documents(kb_id, page, page_size)
+    return ok(
+        [DocumentOut.model_validate(d) for d in docs],
+        meta={"total": total, "page": page, "page_size": page_size},
+    )
 
 
 @router.delete("/kb/{kb_id}/documents/{doc_id}", response_model=Envelope[dict])

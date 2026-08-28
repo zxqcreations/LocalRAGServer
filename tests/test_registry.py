@@ -77,3 +77,53 @@ def test_document_failed_then_reingested_recovers(tmp_path):
     fresh = reg.get_document(kb.id, doc.id)
     assert fresh.status == "ready"
     assert fresh.error is None
+
+
+# ---------- 分页 ----------
+
+
+def test_kbs_enriched_pagination(tmp_path):
+    reg = _make_reg(tmp_path)
+    for i in range(5):
+        reg.create_kb(f"库-{i}", "document")
+
+    # 全量（兼容旧调用方）
+    assert len(reg.list_kbs_enriched()) == 5
+    # 每页 2 条
+    page1 = reg.list_kbs_enriched(page=1, page_size=2)
+    page2 = reg.list_kbs_enriched(page=2, page_size=2)
+    page3 = reg.list_kbs_enriched(page=3, page_size=2)
+    ids1 = {k["id"] for k in page1}
+    ids2 = {k["id"] for k in page2}
+    ids3 = {k["id"] for k in page3}
+    assert len(ids1) == 2 and len(ids2) == 2 and len(ids3) == 1
+    # 不重叠且全覆盖
+    assert ids1.isdisjoint(ids2) and ids1.isdisjoint(ids3) and ids2.isdisjoint(ids3)
+    assert ids1 | ids2 | ids3 == {k["id"] for k in reg.list_kbs_enriched()}
+    # count 与分页和一致
+    assert reg.count_kbs() == 5
+    # 越界页返回空
+    assert reg.list_kbs_enriched(page=9, page_size=2) == []
+
+
+def test_documents_pagination(tmp_path):
+    reg = _make_reg(tmp_path)
+    kb = reg.create_kb("kb")
+    for i in range(7):
+        reg.create_document(kb.id, f"doc-{i}.md", f"upload://doc-{i}.md", f"hash-{i}")
+
+    # 全量
+    assert len(reg.list_documents(kb.id)) == 7
+    assert reg.count_documents(kb.id) == 7
+    # 每页 3 条
+    p1 = [d.id for d in reg.list_documents(kb.id, page=1, page_size=3)]
+    p2 = [d.id for d in reg.list_documents(kb.id, page=2, page_size=3)]
+    p3 = [d.id for d in reg.list_documents(kb.id, page=3, page_size=3)]
+    assert len(p1) == 3 and len(p2) == 3 and len(p3) == 1
+    assert len(set(p1 + p2 + p3)) == 7
+    # 越界页空
+    assert reg.list_documents(kb.id, page=9, page_size=3) == []
+    # 空 KB 文档数 0
+    empty = reg.create_kb("empty")
+    assert reg.list_documents(empty.id, page=1, page_size=3) == []
+    assert reg.count_documents(empty.id) == 0

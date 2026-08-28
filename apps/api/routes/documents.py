@@ -69,6 +69,7 @@ def upload_document(
         raise_http(415, UNSUPPORTED_FORMAT, f"不支持的文件格式：{suffix or '(无扩展名)'}")
     max_bytes = settings.max_upload_mb * 1024 * 1024
     if file.size is not None and file.size > max_bytes:
+        print(f"[!] Upload exceeded max size: {file.size} bytes > {max_bytes} bytes")
         raise_http(413, PAYLOAD_TOO_LARGE, f"文件超过大小限制（{settings.max_upload_mb}MB）")
 
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
@@ -79,6 +80,7 @@ def upload_document(
             while chunk := file.file.read(_READ_CHUNK):
                 total += len(chunk)
                 if total > max_bytes:
+                    print(f"[!] Upload exceeded max size: {total} bytes > {max_bytes} bytes")
                     raise_http(
                         413, PAYLOAD_TOO_LARGE, f"文件超过大小限制（{settings.max_upload_mb}MB）"
                     )

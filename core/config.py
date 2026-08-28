@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # 上传防护（审计 F-07/F-09）
     max_upload_mb: int = 200
-    max_pdf_pages: int = 1000
+    max_pdf_pages: int = 3000
 
     # 生成策略：检索最高分低于阈值 => 拒答（Phase 2 起按 KB 校准，见 quality.md）
     refusal_threshold: float = 0.25

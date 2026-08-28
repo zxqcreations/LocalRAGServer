@@ -57,6 +57,25 @@ async function request(method, path, body) {
   return data.data;
 }
 
+// 分页请求：返回当前页数据与 total（供列表接口取 meta.total）。
+async function requestPage(path, page, pageSize) {
+  const sep = path.includes("?") ? "&" : "?";
+  const resp = await fetch(`${path}${sep}page=${page}&page_size=${pageSize}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json", ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
+    credentials: "same-origin",
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!data.success) {
+    const err = new Error(data.error?.message || `HTTP ${resp.status}`);
+    err.code = data.error?.code;
+    err.status = resp.status;
+    throw err;
+  }
+  const meta = data.meta || {};
+  return { items: data.data || [], total: meta.total || 0, page: meta.page, pageSize: meta.page_size };
+}
+
 export const api = {
   login: (username, password) => request("POST", "/admin/api/login", { username, password }),
   logout: () => request("POST", "/admin/api/logout"),
@@ -76,11 +95,13 @@ export const api = {
   // ---------- KB CRUD ----------
   createKb: (name, kb_type, description) =>
     request("POST", "/admin/api/kb", { name, kb_type, description }),
-  listKbStats: () => request("GET", "/admin/api/kb/stats"),
+  listKbStats: (page = 1, pageSize = 50) =>
+    requestPage("/admin/api/kb/stats", page, pageSize),
   getKbDetail: (kb_id) => request("GET", `/admin/api/kb/${kb_id}`),
   updateKb: (kb_id, data) => request("PUT", `/admin/api/kb/${kb_id}`, data),
   deleteKb: (kb_id) => request("DELETE", `/admin/api/kb/${kb_id}`),
-  listDocs: (kb_id) => request("GET", `/admin/api/kb/${kb_id}/documents`),
+  listDocs: (kb_id, page = 1, pageSize = 50) =>
+    requestPage(`/admin/api/kb/${kb_id}/documents`, page, pageSize),
   deleteDoc: (kb_id, doc_id) => request("DELETE", `/admin/api/kb/${kb_id}/documents/${doc_id}`),
   // 文件上传（base64 JSON，避免 multipart 代理问题）
   uploadDocument: (kb_id, filename, base64Data) =>
@@ -99,8 +120,8 @@ export const api = {
 // 导出 csrfToken（供文件上传等直接 fetch 场景使用）
 export const getCsrfToken = () => csrfToken;
 
-// 别名：旧代码可能直接 import listKbStats
-export const listKbStats = () => api.listKbStats();
+// 别名：旧代码可能直接 import listKbStats（保持默认分页行为）
+export const listKbStats = (page = 1, pageSize = 50) => api.listKbStats(page, pageSize);
 
 export async function apiUpload(path, formData) {
   const headers = {};

@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, inspect, text
+from sqlalchemy import delete, func, inspect, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import Select
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -278,11 +278,21 @@ class Registry:
             total_chunks = sum(d.chunk_count for d in docs)
             return {"doc_count": doc_count, "chunk_count": total_chunks, "failed_count": failed_count}
 
-    def list_kbs_enriched(self) -> list[dict]:
-        """列出所有 KB，附带文档数和碎片数。"""
-        results = []
+    def list_kbs_enriched(
+        self, page: int | None = None, page_size: int | None = None
+    ) -> list[dict]:
+        """列出所有 KB，附带文档数和碎片数。
+
+        可选分页：page/page_size 任一为 None 则全量返回（兼容旧调用方
+        scripts/drill_backup_restore.py 与测试）。分页在 SQL 层用
+        offset/limit 实现（巨量数据只传输当前页）。按 created_at 排序。
+        """
         with Session(self._engine) as s:
-            kbs = s.exec(select(KnowledgeBase).order_by(KnowledgeBase.created_at)).all()  # type: ignore[arg-type]
+            stmt = select(KnowledgeBase).order_by(KnowledgeBase.created_at)
+            if page is not None and page_size is not None:
+                stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+            kbs = s.exec(stmt).all()  # type: ignore[arg-type]
+            results = []
             for kb in kbs:
                 stats = self.get_kb_stats(kb.id)
                 results.append({
@@ -323,9 +333,27 @@ class Registry:
                 )
             ).first()
 
-    def list_documents(self, kb_id: str) -> list[Document]:
+    def list_documents(
+        self, kb_id: str, page: int | None = None, page_size: int | None = None
+    ) -> list[Document]:
+        """列出某 KB 下的文档。可选 SQL 层分页（page/page_size 任一为 None 则全量）。"""
         with Session(self._engine) as s:
-            return list(s.exec(select(Document).where(Document.kb_id == kb_id)))
+            stmt = select(Document).where(Document.kb_id == kb_id)
+            if page is not None and page_size is not None:
+                stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+            return list(s.exec(stmt))
+
+    def count_kbs(self) -> int:
+        with Session(self._engine) as s:
+            return s.exec(select(func.count()).select_from(KnowledgeBase)).one()
+
+    def count_documents(self, kb_id: str) -> int:
+        with Session(self._engine) as s:
+            return s.exec(
+                select(func.count())
+                .select_from(Document)
+                .where(Document.kb_id == kb_id)
+            ).one()
 
     def get_documents_by_ids(self, doc_ids: list[str]) -> dict[str, Document]:
         with Session(self._engine) as s:
@@ -410,10 +438,6 @@ class Registry:
                 )
             )
             s.commit()
-
-    def count_documents(self, kb_id: str) -> int:
-        with Session(self._engine) as s:
-            return len(s.exec(select(Document).where(Document.kb_id == kb_id)).all())
 
     # ---------- API Key（ACL 强制点，审计 F-13/F-02） ----------
 

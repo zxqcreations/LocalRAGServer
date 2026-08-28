@@ -46,7 +46,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # 安全审计 M-5：JSON 端点请求体上限（上传路径另有 max_upload_mb 校验）。
 # 与 TLS 部署的 nginx client_max_body_size 对齐（phase6-plan 附录 A 第 7 项）
-MAX_JSON_BODY_BYTES = 10 * 1024 * 1024  # 10MB
+MAX_JSON_BODY_BYTES = 100 * 1024 * 1024  # 100MB
 
 # MCP streamable HTTP（ADR-006 v1.1）：请求级 ACL 经 contextvar 传递——
 # auth_middleware 认证后写入，MCP 工具调用的 resolver 读取（与 REST 同语义）

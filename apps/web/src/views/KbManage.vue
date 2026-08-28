@@ -74,6 +74,21 @@
           </tr>
         </tbody>
       </table>
+
+      <!-- 分页器 -->
+      <div v-if="total > pageSize" class="pagination">
+        <button
+          class="page-btn"
+          :disabled="page <= 1"
+          @click="gotoPage(page - 1)"
+        >上一页</button>
+        <span class="page-info">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
+        <button
+          class="page-btn"
+          :disabled="page >= totalPages"
+          @click="gotoPage(page + 1)"
+        >下一页</button>
+      </div>
     </div>
 
     <!-- ========== 编辑对话框覆盖层 ========== -->
@@ -146,13 +161,19 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { api, listKbStats } from "../api.js";
 
 const kbs = ref([]);
 const loading = ref(true);
 const error = ref("");
 const showCreateForm = ref(false);
+
+// ---- 分页状态 ----
+const page = ref(1);
+const pageSize = ref(50);
+const total = ref(0);
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 
 // Create form state
 const creating = ref(false);
@@ -173,12 +194,26 @@ const deleting = ref(false);
 async function load() {
   loading.value = true;
   try {
-    kbs.value = await api.listKbStats();
+    const res = await api.listKbStats(page.value, pageSize.value);
+    kbs.value = res.items;
+    total.value = res.total;
+    // 删除后当前页可能越界：回退到最后一页再加载一次
+    const max = Math.max(1, Math.ceil(res.total / pageSize.value));
+    if (page.value > max) {
+      page.value = max;
+      return load();
+    }
   } catch (e) {
     error.value = e.message;
   } finally {
     loading.value = false;
   }
+}
+
+function gotoPage(p) {
+  if (p < 1 || p > totalPages.value) return;
+  page.value = p;
+  load();
 }
 
 onMounted(load);
@@ -377,4 +412,17 @@ tr:hover { background: #fafbfd; }
 .cancel-btn:hover { background: #f5f5f5; }
 .danger { background: var(--bad); color: #fff; border: none; padding: 7px 14px; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- 分页器 ---- */
+.pagination {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line);
+}
+.page-btn {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 10px; cursor: pointer; font-size: 13px; color: var(--soft);
+}
+.page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-info { font-size: 13px; color: var(--soft); }
 </style>

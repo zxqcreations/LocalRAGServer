@@ -18,7 +18,10 @@
         <div class="meta-item"><span class="meta-label">创建时间</span><span class="meta-value">{{ formatDate(kbInfo.created_at) }}</span></div>
         <div class="meta-item"><span class="meta-label">文档数</span><span class="meta-value">{{ kbInfo.doc_count ?? '-' }}</span></div>
         <div class="meta-item"><span class="meta-label">碎片数</span><span class="meta-value">{{ kbInfo.chunk_count ?? '-' }}</span></div>
-        <div class="meta-item"><span class="meta-label">失败数</span><span class="meta-value">{{ failureBadge(kbInfo.failed_count) }}</span></div>
+        <div class="meta-item"><span class="meta-label">失败数</span><span class="meta-value">
+          <span v-if="(kbInfo.failed_count || 0) > 0" class="badge badge-fail">{{ kbInfo.failed_count }}</span>
+          <span v-else class="badge">-</span>
+        </span></div>
       </div>
       <div v-if="kbInfo.description" class="desc-block">
         <span class="meta-label">简介</span>
@@ -62,6 +65,22 @@
           </tr>
         </tbody>
       </table>
+
+      <!-- 文档分页器 -->
+      <div v-if="docTotal > 0" class="pagination">
+        <button
+          class="page-btn"
+          :disabled="docPage <= 1"
+          @click="gotoDocPage(docPage - 1)"
+        >上一页</button>
+        <span class="page-info">第 {{ docPage }} / {{ docTotalPages }} 页 · 共 {{ docTotal }} 篇</span>
+        <button
+          class="page-btn"
+          :disabled="docPage >= docTotalPages"
+          @click="gotoDocPage(docPage + 1)"
+        >下一页</button>
+      </div>
+
       <p v-else-if="!loadingDocs" class="empty-hint">暂无文档，点击上方"上传文档"按钮添加文件</p>
     </div>
 
@@ -160,7 +179,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { api, apiUpload } from "../api.js";
 
@@ -172,10 +191,14 @@ const error = ref("");
 const uploading = ref(false);
 const uploadProgress = ref(0);
 
-// Documents
+// Documents（分页）
 const documents = ref([]);
 const loadingDocs = ref(true);
 const fileInput = ref(null);
+const docPage = ref(1);
+const docPageSize = ref(50);
+const docTotal = ref(0);
+const docTotalPages = computed(() => Math.max(1, Math.ceil(docTotal.value / docPageSize.value)));
 
 // Subscriptions
 const subscriptions = ref([]);
@@ -202,12 +225,25 @@ async function loadKb() {
 async function loadDocs() {
   loadingDocs.value = true;
   try {
-    documents.value = await api.listDocs(kbId);
+    const res = await api.listDocs(kbId, docPage.value, docPageSize.value);
+    documents.value = res.items;
+    docTotal.value = res.total;
+    const max = Math.max(1, Math.ceil(res.total / docPageSize.value));
+    if (docPage.value > max) {
+      docPage.value = max;
+      return loadDocs();
+    }
   } catch (e) {
     if (!error.value) error.value = "加载文档列表失败: " + e.message;
   } finally {
     loadingDocs.value = false;
   }
+}
+
+function gotoDocPage(p) {
+  if (p < 1 || p > docTotalPages.value) return;
+  docPage.value = p;
+  loadDocs();
 }
 
 async function loadSubscriptions() {
@@ -388,11 +424,6 @@ function statusClass(s) {
   };
   return map[s] || "badge";
 }
-
-function failureBadge(n) {
-  if (!n || n === 0) return "<span class='badge'>-</span>";
-  return `<span class="badge badge-fail">${n}</span>`;
-}
 </script>
 
 <style scoped>
@@ -480,6 +511,19 @@ function failureBadge(n) {
 .cancel-btn:hover { background: #f5f5f5; }
 .danger { background: var(--bad); color: #fff; border: none; padding: 7px 14px; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- 分页器 ---- */
+.pagination {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line);
+}
+.page-btn {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 10px; cursor: pointer; font-size: 13px; color: var(--soft);
+}
+.page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-info { font-size: 13px; color: var(--soft); }
 
 .empty-hint { text-align: center; color: var(--soft); padding: 16px 0; font-size: 13px; }
 </style>
